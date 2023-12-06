@@ -91,8 +91,9 @@ treatments <- treatments %>%
   select(ID, Site, Age, iterations, treatment) %>% 
   mutate(Age = as.integer(Age))
 treatments = treatments[order(treatments$iterations), ]
-treatments$bin <- rep(c(sample(seq(1, 6))), times = 10, length.out = 60)
-treatments <- treatments[order(treatments$iterations, treatments$bin),]
+# to assign bins
+sample(1:6, 6)
+treatments <- treatments[order(treatments$iterations),] 
 
 # check that each level is approximately normally distributed
 ul <- treatments %>% 

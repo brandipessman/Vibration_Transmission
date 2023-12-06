@@ -1,0 +1,5 @@
+Dependent,df,Comparison,Level,test_statistic,p_value
+silk_mass,56,Site,Quiet,0.143,0.8865
+silk_mass,56,Site,Loud,1.874,0.0662
+silk_moist,_56,Treatment,Rural,-2.29,0.022
+silk_moist,_56,Treatment,Urban,-0.256,0.7978
