@@ -1,9 +1,0 @@
-Distance,df,Site,Treatment,lower,higher,statistic,p_value
-Close,110,Rural,Quiet,1.29 (0.55), -1.29 (0.55),3.33,0.002
-Close,110,Urban,Quiet,1.85 (0.42), -1.85 (0.42),4.78,0.001
-Close,110,Rural,Loud,1.80 (0.51), -1.80 (0.51),4.646,0.001
-Close,110,Urban,Loud,0.48 (0.68), -0.48 (0.68),1.242,0.2193
-Far,28,Rural,Quiet, -0.84 (0.56),0.84 (0.56),4.216,0.04
-Far,28,Urban,Quiet, -0.53 (0.27),0.53 (0.27),5.688,0.017
-Far,28,Rural,Loud, -0.48 (0.41),0.48 (0.41),0.95,0.33
-Far,28,Urban,Loud, -0.76 (0.48),0.76 (0.48),5.888,0.015
