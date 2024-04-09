@@ -7,172 +7,246 @@ output: html_document
 
 ```{r libraries, include = FALSE}
 library(tidyverse)
-library(lme4) #lmer
-library(MASS) #glm.nb
+library(lme4) #bootstrp
+library(MASS) #glm.nb for age test
 library(broom.mixed) #augment
-library(betareg)
+#library(betareg)
 library(ggpubr) #ggarrange
 library(emmeans) # post hoc
-library(effects)
-library(lubridate)
+library(survival) # survival analysis
+library(survminer)
+library(ggfortify) # autoplot
+#library(effects)
+#library(lubridate)
 library(flextable)
+library(mgcv)
 #library(rstatix)
 
-scale_this <- function(x){
-  (x - mean(x, na.rm=TRUE)) / sd(x, na.rm=TRUE)
-}
-
-center_this <- function(x){
-  (x - mean(x, na.rm=TRUE))
-}
-
 bootStrap <- function(mm) {
-    predict(mm, newdata = nd, re.form = ~0, type = "response")
+    predict(mm, newdata = predictions, re.form = ~0, type = "response")
 }
 
 treatment.labs <- c("Quiet (4 Days)", "Loud (4 Days)")
 names(treatment.labs) <- c("Quiet", "Loud")
 
-group.labs <- c("2022", "2023 - Quiet", "2023 - Loud")
-names(group.labs) <- c("2022", "2023_Quiet", "2023_Loud")
+#group.labs <- c("2022", "2023 - Quiet", "2023 - Loud")
+#names(group.labs) <- c("2022", "2023_Quiet", "2023_Loud")
 
 options(scipen = 999)
 
-range_min = 460
-range_max = 640
+size = 24
+my_theme <- theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top")
+
+two_colors = c("#1b9e77", "#d95f02")
+four_colors = c("#90ecd1", "#1b9e77", "#febd8c", "#d95f02")
 ```
 
 ```{r import test data, include = FALSE}
-datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/text_files_10hz"
-setwd(datapath)
-txt_files_ls = list.files(path = datapath, pattern = "*.txt")
-txt_files_df <- lapply(txt_files_ls, 
-                       function(x){
-                         read.table(file = x, header = TRUE, sep ="\t")
-                         })
-for (i in 1:length(txt_files_df)){
-  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
-  }
-main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
-main <- main %>% 
-  dplyr::select(Low.Freq..Hz., Leq..dB.FS., Inband.Power..dB.FS., `txt_files_ls[i]`) 
-colnames(main) <- c("Low_Freq", "Leq", "Power", "File")
-main <- main %>% 
-  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>% 
-  separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>% 
-  separate(col = Location, into = c("Position", "Trial"), sep = -1) %>% 
-  separate(col = Position, into = c("Distance", "Position"), sep = -1) %>% 
-  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Leq, Power)
-
-test <- main %>% 
-  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Leq) %>% 
-  drop_na() %>% 
-  mutate(Leq_test = Leq) %>% 
-  dplyr::select(-Leq)
-
-# save ambient before after in a new dataframe
-ambient_raw <- test %>% 
-  filter(Distance == "ambient") %>% 
-  unite(col = "unique", SpiderID:Trial, remove = FALSE) %>% 
-  group_by(SpiderID, Distance, Position, Trial) %>% 
-  mutate(centered_leq_test = center_this(Leq_test))
-
-ambient_ba <- ambient_raw %>% 
-  group_by(Low_Freq, Position) %>% 
-  summarize(mean_leq = mean(centered_leq_test),
-            sd_leq = sd(centered_leq_test),
-            se_leq = plotrix::std.error(centered_leq_test))
-
-# remove ambient measures from test
-test <- test %>% 
-  filter(! Distance == "ambient") 
+# datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/text_files_5_38hz"
+# setwd(datapath)
+# txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+# txt_files_df <- lapply(txt_files_ls,
+#                        function(x){
+#                          read.table(file = x, header = TRUE, sep ="\t")
+#                          })
+# for (i in 1:length(txt_files_df)){
+#   txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+#   }
+# main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+# main <- main %>%
+#   dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+# colnames(main) <- c("Low_Freq", "Power", "File")
+# main <- main %>%
+#   separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+#   separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>%
+#   separate(col = Location, into = c("Position", "Trial"), sep = -1) %>%
+#   separate(col = Position, into = c("Distance", "Position"), sep = -1) %>%
+#   dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power)
+# 
+# test_Power <- main %>%
+#   dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power) %>%
+#   drop_na() %>%
+#   mutate(Power_test = Power) %>%
+#   dplyr::select(-Power)
 ```
 
 ```{r import ambient data, include = FALSE}
-datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/text_files_10hz_ambient"
-setwd(datapath)
-txt_files_ls = list.files(path = datapath, pattern = "*.txt")
-txt_files_df <- lapply(txt_files_ls, 
-                       function(x){
-                         read.table(file = x, header = TRUE, sep ="\t")
-                         })
-for (i in 1:length(txt_files_df)){
-  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
-  }
-main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
-main <- main %>% 
-  dplyr::select(Low.Freq..Hz., Leq..dB.FS., Inband.Power..dB.FS., `txt_files_ls[i]`) 
-colnames(main) <- c("Low_Freq", "Leq", "Power", "File")
-main <- main %>% 
-  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>% 
-  separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>% 
-  separate(col = Location, into = c("Position", "Trial"), sep = -1) %>% 
-  separate(col = Position, into = c("Distance", "Position"), sep = -1) %>% 
-  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Leq, Power)
-
-ambient <- main %>% 
-  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Leq) %>% 
-  drop_na() %>% 
-  mutate(Leq_ambient = Leq) %>% 
-  dplyr::select(-Leq)
+# datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/text_files_5_38hz_ambient"
+# setwd(datapath)
+# txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+# txt_files_df <- lapply(txt_files_ls,
+#                        function(x){
+#                          read.table(file = x, header = TRUE, sep ="\t")
+#                          })
+# for (i in 1:length(txt_files_df)){
+#   txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+#   }
+# main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+# main <- main %>%
+#   dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+# colnames(main) <- c("Low_Freq", "Power", "File")
+# main <- main %>%
+#   separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+#   separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>%
+#   separate(col = Location, into = c("Position", "Trial"), sep = -1) %>%
+#   separate(col = Position, into = c("Distance", "Position"), sep = -1) %>%
+#   dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power)
+# 
+# ambient_Power <- main %>%
+#   dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power) %>%
+#   drop_na() %>%
+#   mutate(Power_ambient = Power) %>%
+#   dplyr::select(-Power)
 ```
 
 ```{r corrected leq, include = FALSE}
-# subtract ambient from test measures
-main <- full_join(test, ambient, by = c("SpiderID", "Distance", "Position", "Trial", "Low_Freq")) %>% 
-  mutate(Leq = Leq_test - Leq_ambient) %>% 
-  group_by(SpiderID, Distance, Position, Trial) %>% 
-  mutate(centered_leq = center_this(Leq))
-  
-# import spiders dataframe with info about silk
-spiders <- read.csv("/Users/bjpessman/Documents/phd_research_code/vibration_transmission/assigning_treatments/treatments_assigned_20230905.csv", header = TRUE)
-
-main <- left_join(main, spiders, by = "SpiderID")
-  
-main <- unite(data = main, col = "unique", SpiderID:Trial, remove = FALSE)
+# # subtract ambient from test measures
+# main <- full_join(test_Power, ambient_Power, by = c("SpiderID", "Distance", "Position", "Trial", "Low_Freq")) %>%
+#   mutate(Power_ambient_u = 10^(Power_ambient/10),
+#          Power_test_u = 10^(Power_test/10),
+#          snr_u = (Power_test_u - Power_ambient_u)/Power_ambient_u,
+#          snr_db = 10 * log10(snr_u)) %>%
+#   #filter(! Low_Freq < 20) %>% # drops 4320 rows (4 Low_Freq x 60 Spiders * 18 trials)
+#   dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, snr_db) %>%
+#   group_by(SpiderID, Distance, Position, Trial)
+# 
+# main_removed1 <- main %>%
+#   group_by(SpiderID, Distance, Position, Trial) %>%
+#   summarize(sum_na = sum(is.na(snr_db))) # 16956 dropped across 1080 trials (avg 15.7 per trial); these are instances where the background noise was greater than the recording (log10 of <= 0)
+# main_removed2 <- main %>%
+#   drop_na() %>%
+#   filter(snr_db < 0) %>%
+#   group_by(SpiderID, Distance, Position, Trial) %>%
+#   count() # 32324 dropped across 1054 trials (avg 30.7 per trial); these are instances where the background noise nearly equalled the recording (log10 of 0.001-0.999)
+# main_removed <- full_join(main_removed1, main_removed2) %>%
+#   mutate(sum_zero = n) %>%
+#   dplyr::select(-n)
+# main_removed[is.na(main_removed)] <- 0
+# main_removed <- main_removed %>%
+#   mutate(sum = sum_na + sum_zero)
+# main <- main %>%
+#   drop_na() %>%
+#   filter(! snr_db < 0)
+# 
+# save(main_removed, file = "data/main_removed.RData")
+# 
+# # import spiders dataframe with info about silk
+# spiders <- read.csv("/Users/bjpessman/Documents/phd_research_code/vibration_transmission/assigning_treatments/treatments_assigned_20230905.csv", header = TRUE)
+# 
+# main <- left_join(main, spiders, by = "SpiderID")
+# 
+# main <- unite(data = main, col = "unique", SpiderID:Trial, remove = FALSE)
+# 
+# save(main, file = "data/main.RData")
+# save(spiders, file = "data/spiders.RData")
 ```
 
 ```{r import field noise, include = FALSE}
-datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/field_noise"
-setwd(datapath)
-txt_files_ls = list.files(path = datapath, pattern = "*.txt")
-txt_files_df <- lapply(txt_files_ls, 
-                       function(x){
-                         read.table(file = x, header = TRUE, sep ="\t")
-                         })
-for (i in 1:length(txt_files_df)){
-  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
-  }
-noise <- do.call("rbind", lapply(txt_files_df, as.data.frame))
-noise <- noise %>% 
-  dplyr::select(Low.Freq..Hz., Leq..dB.FS., `txt_files_ls[i]`) 
-colnames(noise) <- c("Low_Freq", "Leq", "File")
-noise <- noise %>% 
-  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>% 
-  separate_wider_delim(cols = Name, names = c("Site", "Visit", "Recorder"), "_") %>% 
-  dplyr::select(Site, Visit, Recorder, Low_Freq, Leq) %>% 
-  drop_na() 
+# datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/field_frequencies_5_86hz/"
+# setwd(datapath)
+# txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+# txt_files_df <- lapply(txt_files_ls,
+#                        function(x){
+#                          read.table(file = x, header = TRUE, sep ="\t")
+#                          })
+# for (i in 1:length(txt_files_df)){
+#   txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+#   }
+# noise <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+# noise <- noise %>%
+#   dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+# colnames(noise) <- c("Low_Freq", "Power", "File")
+# noise <- noise %>%
+#   separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+#   separate_wider_delim(cols = Name, names = c("Site", "Visit", "Recorder"), "_") %>%
+#   dplyr::select(Site, Visit, Recorder, Low_Freq, Power) %>%
+#   drop_na()  %>%
+#   mutate(Location = ifelse(Site == "4A" | Site == "5C" | Site == "8B", "Urban", "Rural"),
+#          Location = factor(Location),
+#          Location = fct_relevel(Location, "Rural", "Urban"))
+# 
+# save(noise, file = "data/noise.RData")
 ```
 
-```{r import frequency response, include = FALSE}
-freq_response_all <- read.csv("data/frequency_response.csv")  %>% 
-  dplyr::select(SpiderID:hz1000) %>% 
-  filter(!Experiment == "Web") %>% 
-  pivot_longer(cols = c(hz100:hz1000), values_to = "react", names_to = "frequency") %>% 
-  mutate(frequency = fct_recode(frequency, "100" = "hz100",
-                                "200" = "hz200",
-                                "300" = "hz300",
-                                "400" = "hz400",
-                                "500" = "hz500",
-                                "600" = "hz600",
-                                "700" = "hz700",
-                                "800" = "hz800",
-                                "900" = "hz900",
-                                "1000" = "hz1000"))
+```{r import playback, include = FALSE}
+# datapath = "/Users/bjpessman/Library/CloudStorage/OneDrive-UniversityofNebraska-Lincoln/PhD Research/Summer 2023/vibration_transmission/playback"
+# setwd(datapath)
+# txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+# txt_files_df <- lapply(txt_files_ls,
+#                        function(x){
+#                          read.table(file = x, header = TRUE, sep ="\t")
+#                          })
+# for (i in 1:length(txt_files_df)){
+#   txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+#   }
+# playback <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+# playback <- playback %>%
+#   dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+# colnames(playback) <- c("Low_Freq", "Power", "File")
+# playback <- playback %>%
+#   separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+#   separate_wider_delim(cols = Name, names = c("Rec", "Treatment"), "_") %>%
+#   dplyr::select(Rec, Treatment, Low_Freq, Power)
+# 
+# quiet <- playback %>%
+#   filter(Treatment == "ambient" | Treatment == "quiet") %>%
+#   pivot_wider(names_from = "Treatment", values_from = "Power") %>%
+#   mutate(ambient_u = 10^(ambient/10),
+#          quiet_u = 10^(quiet/10),
+#          snr_u = (quiet_u - ambient_u)/ambient_u,
+#          snr_db = 10 * log10(snr_u),
+#          Treatment = "Quiet") %>%
+#   dplyr::select(Rec, Low_Freq, Treatment, snr_db)
+# 
+# loud <- playback %>%
+#   filter(Treatment == "ambient" | Treatment == "loud") %>%
+#   pivot_wider(names_from = "Treatment", values_from = "Power") %>%
+#   mutate(ambient_u = 10^(ambient/10),
+#          loud_u = 10^(loud/10),
+#          snr_u = (loud_u - ambient_u)/ambient_u,
+#          snr_db = 10 * log10(snr_u),
+#          Treatment = "Loud") %>%
+#   dplyr::select(Rec, Low_Freq, Treatment, snr_db)
+# 
+# playback <- rbind(quiet, loud) %>%
+#   mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+# 
+# playback_removed1 <- playback %>%
+#   group_by(Rec, Treatment) %>%
+#   summarize(sum_na = sum(is.na(snr_db))) # dropped 901 rows from 12 trials (mostly from quiet because the quiet treatment could be louder than ambient at times)
+# playback_removed2 <- playback %>%
+#   filter(snr_db < 0) %>%
+#   drop_na() %>%
+#   group_by(Rec, Treatment) %>%
+#   count() # dropped 734 rows from 11 trials (mostly from quiet)
+# playback_removed <- full_join(playback_removed1, playback_removed2) %>%
+#   mutate(sum_zero = n) %>%
+#   dplyr::select(-n)
+# playback_removed[is.na(playback_removed)] <- 0
+# playback_removed <- playback_removed %>%
+#   mutate(sum = sum_na + sum_zero)
+# 
+# save(playback_removed, file = "data/playback_removed.RData")
+# 
+# playback <- playback %>%
+#   drop_na() %>%
+#   filter(! snr_db < 0) %>%
+#   mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+# 
+# save(playback, file = "data/playback.RData")
+```
+
+```{r load frequency response, include = FALSE}
 
 freq_response_attack <- read.csv("data/frequency_response_attack.csv") %>% 
   dplyr::select(SpiderID:hz1000)%>% 
-  filter(!Experiment == "Web") %>% 
+  #filter(!Experiment == "Web") %>% 
   pivot_longer(cols = c(hz100:hz1000), values_to = "react", names_to = "frequency") %>% 
   mutate(frequency = fct_recode(frequency, "100" = "hz100",
                                 "200" = "hz200",
@@ -186,47 +260,162 @@ freq_response_attack <- read.csv("data/frequency_response_attack.csv") %>%
                                 "1000" = "hz1000"))
 
 freq_response_attack %>% 
-  filter(! is.na(Rest_Days)) %>% 
-  group_by(Year) %>% 
-  summarize(mean_rest = mean(Rest_Days),
-            mean_age = mean(Freq_Age))
+  filter(frequency == 100) %>% 
+  group_by(Year, Experiment) %>% 
+  summarize(min = min(Rest_Days), 
+            max = max(Rest_Days), 
+            mean = mean(Rest_Days), 
+            se = plotrix::std.error(Rest_Days))
 
-isolated_all <- read.csv("data/isolated_all_response.csv")  %>% 
-  pivot_longer(cols = c(f_100:f_1000), values_to = "react", names_to = "frequency") %>% 
-  mutate(frequency = fct_recode(frequency, "100" = "f_100",
-                                "200" = "f_200",
-                                "300" = "f_300",
-                                "400" = "f_400",
-                                "500" = "f_500",
-                                "600" = "f_600",
-                                "700" = "f_700",
-                                "800" = "f_800",
-                                "900" = "f_900",
-                                "1000" = "f_1000"))
+freq_response_attack %>% 
+  filter(frequency == 100) %>% 
+  group_by(Year, Experiment, Site, treatment) %>% 
+  count()
+```
 
-isolated_attack <- read.csv("data/isolated_attacks.csv")  %>% 
-  pivot_longer(cols = c(f_100:f_1000), values_to = "react", names_to = "frequency") %>% 
-  mutate(frequency = fct_recode(frequency, "100" = "f_100",
-                                "200" = "f_200",
-                                "300" = "f_300",
-                                "400" = "f_400",
-                                "500" = "f_500",
-                                "600" = "f_600",
-                                "700" = "f_700",
-                                "800" = "f_800",
-                                "900" = "f_900",
-                                "1000" = "f_1000"))
+```{r load web vibration, include = FALSE}
+load(file = "data/main.RData")
+load(file = "data/noise.RData")
+load(file = "data/playback.RData")
+load(file = "data/spiders.RData")
+load(file = "data/main_removed.RData")
+load(file = "data/playback_removed.RData")
+
+stimulus <- read.csv("data/stimulus2.csv") %>% 
+  mutate(Power_ambient_u = 10^(Power_ambient/10),
+         Power_test_u = 10^(Power_test/10),
+         snr_u = (Power_test_u - Power_ambient_u)/Power_ambient_u,
+         snr_db = 10 * log10(snr_u)) %>% 
+  #filter(! Low_Freq < 20) %>% 
+  dplyr::select(Low_Freq, Power_test, snr_db)
+
+sum(is.na(stimulus$snr_db)) # one dropped Low_Freq = 91.5
+stimulus %>% # one dropped Low_Freq = 86.1
+  filter(snr_db < 0) %>%
+  drop_na() %>%
+  count()
+
+stimulus <- stimulus %>% 
+  filter(! snr_db < 0) %>% 
+  drop_na()
+
+# subtract the stimulus from each recording
+main_att <- left_join(main, stimulus, by = "Low_Freq") %>% 
+  mutate(snr_db_main = snr_db.x,
+         snr_db_stim = snr_db.y,
+         snr_db_att = snr_db_main - snr_db_stim,
+         Site = factor(Site),
+         treatment = factor(treatment)) %>% 
+  unite("Dist_Pos", Distance:Position, sep = "_", remove = FALSE)
+
+main_att_removed <- main_att %>%
+  group_by(SpiderID, Distance, Position, Trial) %>%
+  summarize(sum_na = sum(is.na(snr_db_att)))
+ # dropped 1817 because stimulus had been dropped at that Low_Freq (86.1 or 91.5)
+
+main_att <- main_att %>% 
+  drop_na(snr_db_att)
+```
+
+```{r load attacks, include = FALSE}
+day_one <- read.csv("data/tb_2022.csv") %>% 
+  mutate(Attacked = ifelse(Attacked == "FALSE", 0, 1),
+         Mistake = ifelse(Mistake == "FALSE", 0, 1),
+         Lat_per_cm = Move_Lat / Distance_cm,
+         Attack_per_cm = Attack_Time / Distance_cm,
+         total_time = Attack_Time + Move_Lat,
+         total_time_per_cm = total_time / Distance_cm) %>% 
+  unite("Site_Treatment", Site:Treatment, remove = FALSE) %>% 
+  mutate(Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+         Site = factor(Site),
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         Treatment = factor(Treatment),
+         Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+
+prey <- read.csv("data/lab_spiders_2021_project.csv", header = TRUE)
+
+three_weeks <- prey %>% 
+  filter(died_yn == "n") %>% # only those that survived the whole experiment
+  dplyr::select(spider, treatment1, treatment2, location, noise_location, sex, tb_1, tb_2, tb_3, tb_4, tb_5, tb_6, tb_7, tb_8, tb_9, tb_10, tb_11, tb_12, prey_1, prey_2, prey_3, prey_4, prey_5, prey_6, prey_7, prey_8, prey_9, prey_10, prey_11, prey_12) %>% # gathering all of the attack data
+  pivot_longer(cols = c(tb_1:prey_12), names_to = "stimulus_trial", values_to = "attack_time") %>% #reformat
+  separate(col = stimulus_trial, into = c("stimulus", "trial"), sep = "_") %>% # formatting
+  mutate(stimulus = fct_recode(stimulus, "Artificial" = "tb", "Live" = "prey"),
+         noise_location = fct_recode(noise_location, "Urban" = "city", "Rural" = "rural"),
+         trial = as.numeric(trial)) %>% # renaming
+  #unite("treatment", c(treatment1, treatment2), sep = "_") %>% # new variable
+  filter(treatment1 == "loud" | treatment1 == "quiet",
+         sex == "F",
+         stimulus == "Artificial",
+         trial > 2 & trial < 7) %>% # only females that remaining on the same treatment
+  mutate(treatment1 = fct_recode(treatment1, "Loud" = "loud", "Quiet" = "quiet"), # rename
+         attack = ifelse(attack_time == 30, 0, 1)) %>% # give a 1 or 0 by whether or not they attacked in 30s (for censoring) 
+  unite("Site_Treatment", c(noise_location, treatment1), sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+         treatment1 = fct_relevel(treatment1, "Quiet", "Loud"))
+
+six_weeks <- prey %>% 
+  filter(died_yn == "n") %>% # only those that survived the whole experiment
+  dplyr::select(spider, treatment1, treatment2, location, noise_location, sex, tb_1, tb_2, tb_3, tb_4, tb_5, tb_6, tb_7, tb_8, tb_9, tb_10, tb_11, tb_12, prey_1, prey_2, prey_3, prey_4, prey_5, prey_6, prey_7, prey_8, prey_9, prey_10, prey_11, prey_12) %>% # gathering all of the attack data
+  pivot_longer(cols = c(tb_1:prey_12), names_to = "stimulus_trial", values_to = "attack_time") %>% #reformat
+  separate(col = stimulus_trial, into = c("stimulus", "trial"), sep = "_") %>% # formatting
+  mutate(stimulus = fct_recode(stimulus, "Artificial" = "tb", "Live" = "prey"),
+         noise_location = fct_recode(noise_location, "Urban" = "city", "Rural" = "rural"),
+         trial = as.numeric(trial),
+         treatment1 = fct_recode(treatment1, "Loud" = "loud", "Quiet" = "quiet"),
+         treatment2 = fct_recode(treatment2, "Loud" = "loud", "Quiet" = "quiet")) %>%
+  unite("treatment", c(treatment1, treatment2), sep = "_", remove = FALSE) %>% # new variable
+  filter(treatment == "Loud_Loud" | treatment == "Quiet_Quiet",
+         sex == "F",
+         stimulus == "Artificial",
+         trial > 8) %>% # only females that remaining on the same treatment
+  mutate(attack = ifelse(attack_time == 30, 0, 1)) %>% # give a 1 or 0 by whether or not they attacked in 30s (for censoring) 
+  unite("Site_Treatment", c(noise_location, treatment1), sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+         treatment1 = fct_relevel(treatment1, "Quiet", "Loud"))
+
+six_weeks_switch <- prey %>% 
+  filter(died_yn == "n") %>% # only those that survived the whole experiment
+  dplyr::select(spider, treatment1, treatment2, location, noise_location, sex, tb_1, tb_2, tb_3, tb_4, tb_5, tb_6, tb_7, tb_8, tb_9, tb_10, tb_11, tb_12, prey_1, prey_2, prey_3, prey_4, prey_5, prey_6, prey_7, prey_8, prey_9, prey_10, prey_11, prey_12) %>% # gathering all of the attack data
+  pivot_longer(cols = c(tb_1:prey_12), names_to = "stimulus_trial", values_to = "attack_time") %>% #reformat
+  separate(col = stimulus_trial, into = c("stimulus", "trial"), sep = "_") %>% # formatting
+  mutate(stimulus = fct_recode(stimulus, "Artificial" = "tb", "Live" = "prey"),
+         noise_location = fct_recode(noise_location, "Urban" = "city", "Rural" = "rural"),
+         trial = as.numeric(trial),
+         treatment1 = fct_recode(treatment1, "Loud" = "loud", "Quiet" = "quiet"),
+         treatment2 = fct_recode(treatment2, "Loud" = "loud", "Quiet" = "quiet")) %>%
+  unite("treatment", c(treatment1, treatment2), sep = "_", remove = FALSE) %>% # new variable
+  filter(treatment == "Loud_Quiet" | treatment == "Quiet_Loud",
+         sex == "F",
+         stimulus == "Artificial",
+         trial > 8) %>% # only females that remaining on the same treatment
+  mutate(attack = ifelse(attack_time == 30, 0, 1)) %>% # give a 1 or 0 by whether or not they attacked in 30s (for censoring) 
+  unite("Site_Treatment", c(noise_location, treatment2), sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+         treatment2 = factor(treatment2),
+         treatment2 = fct_relevel(treatment2, "Quiet", "Loud"))
+
+before_after <- prey %>% 
+  filter(died_yn == "n") %>% # only those that survived the whole experiment
+  dplyr::select(spider, treatment1, treatment2, location, noise_location, sex, tb_1, tb_2, tb_3, tb_4, tb_5, tb_6, tb_7, tb_8, tb_9, tb_10, tb_11, tb_12, prey_1, prey_2, prey_3, prey_4, prey_5, prey_6, prey_7, prey_8, prey_9, prey_10, prey_11, prey_12) %>% # gathering all of the attack data
+  pivot_longer(cols = c(tb_1:prey_12), names_to = "stimulus_trial", values_to = "attack_time") %>% #reformat
+  separate(col = stimulus_trial, into = c("stimulus", "trial"), sep = "_") %>% # formatting
+  mutate(stimulus = fct_recode(stimulus, "Artificial" = "tb", "Live" = "prey"),
+         noise_location = fct_recode(noise_location, "Urban" = "city", "Rural" = "rural"),
+         trial = as.numeric(trial),
+         treatment1 = fct_recode(treatment1, "Loud" = "loud", "Quiet" = "quiet"),
+         treatment2 = fct_recode(treatment2, "Loud" = "loud", "Quiet" = "quiet")) %>% # renaming
+  unite("treatment", c(treatment1, treatment2), sep = "_", remove = FALSE) %>% # new variable
+  filter(treatment == "Loud_Loud" | treatment == "Loud_Quiet" | treatment == "Quiet_Quiet" | treatment == "Quiet_Loud", 
+         sex == "F",
+         stimulus == "Artificial",
+         trial > 2 & trial < 7 | trial == 7) %>% # only females that remaining on the same treatment
+  mutate(attack = ifelse(attack_time == 30, 0, 1),
+         ba = ifelse(trial == 7, "after", "before")) %>% # give a 1 or 0 by whether or not they attacked in 30s (for censoring) 
+  unite("Site_Treatment", c(noise_location, treatment), sep = "_", remove = FALSE)
 ```
 
 ## Descriptives
-
-**Sample Size **
-```{r sample_size, echo = FALSE, message = FALSE}
-main %>% 
-  group_by(Site, treatment) %>% 
-  count() %>% 
-  mutate(n = n/200/18)
-```
 
 **Age and Condition**
 ```{r age and condition, echo = FALSE, message = FALSE}
@@ -236,9 +425,10 @@ spiders2 <- spiders %>%
 rownames(spiders2) <- c(spiders2$SpiderID)
 cond <- data.frame(cbind(condition = residuals(lm(log(mass_mg) ~ log(ceph_width_mm), data = spiders2)),
                          SpiderID = names(residuals(lm(log(mass_mg) ~ log(ceph_width_mm), data = spiders2)))))
-# add condition to the choice dataset
+# add condition to the dataset
 spiders2 <- full_join(spiders2, cond, by = "SpiderID") %>% 
-  mutate(condition = as.numeric(condition))
+  mutate(condition = as.numeric(condition)) %>% 
+  unite("Site_Treatment", c(Site, treatment), sep = "_", remove = FALSE)
 
 spiders2 %>% 
   group_by(Site, treatment) %>% 
@@ -248,7 +438,8 @@ spiders2 %>%
             se_cond = plotrix::std.error(condition)) %>% 
   ggplot() +
   geom_point(aes(x = Site, y = mean_age, color = treatment)) +
-  geom_errorbar(aes(x = Site, ymax = mean_age + se_age, ymin = mean_age - se_age, color = treatment))
+  geom_errorbar(aes(x = Site, ymax = mean_age + se_age, ymin = mean_age - se_age, color = treatment)) +
+  my_theme
 
 spiders2 %>% 
   group_by(Site, treatment) %>% 
@@ -258,317 +449,323 @@ spiders2 %>%
             se_cond = plotrix::std.error(condition)) %>% 
   ggplot() +
   geom_point(aes(x = Site, y = mean_cond, color = treatment)) +
-  geom_errorbar(aes(x = Site, ymax = mean_cond + se_cond, ymin = mean_cond - se_cond, color = treatment))
+  geom_errorbar(aes(x = Site, ymax = mean_cond + se_cond, ymin = mean_cond - se_cond, color = treatment)) +
+  my_theme
+
+spiders2 %>% 
+  group_by(Site, treatment) %>% 
+  summarize(mean_mass = mean(mass_mg),
+            se_mass = plotrix::std.error(mass_mg)) %>% 
+  ggplot() +
+  geom_point(aes(x = Site, y = mean_mass, color = treatment)) +
+  geom_errorbar(aes(x = Site, ymax = mean_mass + se_mass, ymin = mean_mass - se_mass, color = treatment)) +
+  my_theme
 
 shapiro.test(rank(spiders2$trial_age))
-car::Anova(lm(log(trial_age) ~ Site * treatment, data = spiders2))
-trial_age <- glm.nb(trial_age ~ Site * treatment, data = spiders2)
+car::Anova(lm(rank(trial_age) ~ Site_Treatment, data = spiders2))
+trial_age <- glm.nb(trial_age ~ Site_Treatment, data = spiders2)
 car::Anova(trial_age)
+car::Anova(lm(trial_age ~ Site_Treatment, data = spiders2))
 
 shapiro.test(spiders2$condition)
-car::Anova(lm(condition ~ Site * treatment, data = spiders2))
-```
+car::Anova(lm(condition ~ Site_Treatment, data = spiders2))
 
-**Ambient Before vs. After**
-```{r ambient_before_after, echo = FALSE, message = FALSE}
-ggplot() +
-  geom_line(aes(x = Low_Freq, y = mean_leq, group = Position, color = Position), data = ambient_ba, linewidth = 1) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, group = Position, fill = Position), alpha = 0.5, data = ambient_ba) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  scale_fill_manual(values = c("#7570b3", "#e6ab02"),
-                     labels = c("Before", "After")) +
-  scale_color_manual(values = c("#7570b3", "#e6ab02"),
-                     labels = c("Before", "After")) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 12, color = "black"),
-        legend.position = "top")
+shapiro.test(spiders2$mass_mg)
+car::Anova(lm(mass_mg ~ Site_Treatment, data = spiders2))
 ```
 
 **Close vs Far Overall**
 ```{r close_far, echo = FALSE, message = FALSE}
 # positions - site x treatment
-distances <- main %>% 
-  filter(! Site == "Isolated") %>% 
-  unite(col = "Dist_Pos", Distance:Position, remove = FALSE) %>% 
+distances <- main_att %>% 
   group_by(Low_Freq, Site, treatment, Dist_Pos) %>% 
-  summarize(mean_leq = mean(centered_leq),
-            sd_leq = sd(centered_leq),
-            se_leq = plotrix::std.error(centered_leq)) %>% 
+  summarize(mean_snr = mean(snr_db_att),
+            se_snr = plotrix::std.error(snr_db_att)) %>% 
   mutate(treatment = factor(treatment),
          treatment= fct_relevel(treatment, "Quiet", "Loud"),
          Dist_Pos = fct_recode(Dist_Pos, "Close A" = "close_a", "Close B" = "close_b", "Close C" = "close_c", "Far A" = "far_a", "Far B" = "far_b", "Far C" = "far_c"),
-         Dist_Pos = fct_relevel(Dist_Pos, "Close A", "Far A", "Close B", "Far B", "Close C", "Far C"))
+         Dist_Pos = fct_relevel(Dist_Pos, "Close A", "Far A", "Close B", "Far B", "Close C", "Far C")) 
 
 ggplot() +
-  geom_line(aes(x = Low_Freq, y = mean_leq, group = Dist_Pos, color = Dist_Pos), data = distances) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, group = Dist_Pos, fill = Dist_Pos), alpha = 0.5, data = distances) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude (Mean Centered Leq, dB)") +
+  geom_line(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos), alpha = 0.2, data = distances, linewidth = 0.25) +
+  geom_smooth(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos, fill = Dist_Pos), data = distances, method = "loess", linewidth = 0.5) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
   labs(fill = "Position", color = "Position") +
-  scale_y_continuous(limits = c(-15, 25), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black"),
-        axis.title = element_text(size = 14, color = "black"),
-        legend.text = element_text(size = 14, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.position = "top",
-        strip.text = element_text(size = 14, color = "black", family="sans")) +
+  scale_color_manual("Position", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_fill_manual("Position", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_x_continuous(limits = c(20, 2250), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-75, 20), breaks = c(seq(-60, 20, 20)), expand = c(0,0)) +
+  #scale_x_continuous(limits = c(20, 1000), breaks = c(20, 250, 500, 750, 1000), expand = c(0,0)) +
+  #scale_y_continuous(limits = c(-60, 20), breaks = c(seq(-50, 20, 10)), expand = c(0,0)) +
+  my_theme +
   facet_grid(Site ~ treatment, labeller = labeller(treatment = treatment.labs))
+#700 x 500
 
 #positions - overall
-distances <- main %>% 
-  filter(! Site == "Isolated") %>% 
-  unite(col = "Dist_Pos", Distance:Position, remove = FALSE) %>% 
+distances <- main_att %>% 
   group_by(Low_Freq, Dist_Pos) %>% 
-  summarize(mean_leq = mean(centered_leq),
-            sd_leq = sd(centered_leq),
-            se_leq = plotrix::std.error(centered_leq))
+  summarize(mean_snr = mean(snr_db_att),
+            se_snr = plotrix::std.error(snr_db_att)) %>% 
+  mutate(Dist_Pos = fct_recode(Dist_Pos, "Close A" = "close_a", "Close B" = "close_b", "Close C" = "close_c", "Far A" = "far_a", "Far B" = "far_b", "Far C" = "far_c"),
+         Dist_Pos = fct_relevel(Dist_Pos, "Close A", "Far A", "Close B", "Far B", "Close C", "Far C")) 
 
 ggplot() +
-  geom_line(aes(x = Low_Freq, y = mean_leq, group = Dist_Pos, color = Dist_Pos), data = distances) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, group = Dist_Pos, fill = Dist_Pos), alpha = 0.5, data = distances) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
+  geom_vline(xintercept = 1000, linetype = "dashed") +
+  geom_line(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos), alpha = 0.2, data = distances, linewidth = 0.25) +
+ geom_smooth(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos, fill = Dist_Pos), data = distances, method = "loess") +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
   labs(fill = "Distance_Position", color = "Distance_Position") +
-  scale_y_continuous(limits = c(-10, 20), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 12, color = "black"))
-
-# close/far - site x treatment
-distances <- main %>% 
-  filter(! Site == "Isolated") %>% 
-  unite(col = "Dist_Pos", Distance:Position, remove = FALSE) %>% 
-  group_by(Low_Freq, Site, treatment, Distance) %>% 
-  summarize(mean_leq = mean(Leq),
-            sd_leq = sd(Leq),
-            se_leq = plotrix::std.error(Leq)) %>% 
-  mutate(treatment = factor(treatment),
-         treatment= fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  geom_line(aes(x = Low_Freq, y = mean_leq, group = Distance, color = Distance), data = distances) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, group = Distance, fill = Distance), alpha = 0.5, data = distances) +
-  xlab("Frequency (10 Hz Bins)") +
-  # only test - ambient
-  ylab("Corrected Amplitude (Leq, dB)") +
-  scale_fill_manual(values = c("black", "grey60"),
-                     labels = c("Close", "Far")) +
-  scale_color_manual(values = c("black", "grey60"),
-                     labels = c("Close", "Far")) +
-  scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 12, color = "black"),
-        strip.text = element_text(size = 12, color = "black", family="sans")) +
-  facet_grid(Site ~ treatment, labeller = labeller(treatment = treatment.labs))
-
-#close/far - overall
-distances <- main %>% 
-  filter(! Site == "Isolated") %>% 
-  unite(col = "Dist_Pos", Distance:Position, remove = FALSE) %>% 
-  group_by(Low_Freq, Distance) %>% 
-  summarize(mean_leq = mean(Leq),
-            sd_leq = sd(Leq),
-            se_leq = plotrix::std.error(Leq))
-
-ggplot() +
-  annotate(geom = "rect", ymin = 0, ymax = 30, xmin = range_min, xmax = range_max, fill = "grey90") +
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  geom_line(aes(x = Low_Freq, y = mean_leq, group = Distance, color = Distance), data = distances) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, group = Distance, fill = Distance), alpha = 0.5, data = distances) +
-  xlab("Frequency (10 Hz Bins)") +
-  # only test - ambient
-  ylab("Corrected Amplitude (Leq, dB)") +
-  scale_fill_manual(values = c("black", "grey60"),
-                     labels = c("Close", "Far")) +
-  scale_color_manual(values = c("black", "grey60"),
-                     labels = c("Close", "Far")) +
-  scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30), expand = c(0,0)) + 
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black"),
-        axis.title = element_text(size = 14, color = "black"),
-        legend.text = element_text(size = 14, color = "black"),
-        legend.title = element_text(size = 14, color = "black"))
+  scale_color_manual("Position", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_fill_manual("Position", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_x_continuous(limits = c(0, 2100), breaks = c(0, 500, 1000, 1500, 2000), expand = c(0,0)) + scale_y_continuous(limits = c(-75, 18), breaks = c(seq(-70, 10, 10)), expand = c(0,0)) +
+  #scale_x_continuous(limits = c(0, 1000), breaks = c(0, 250, 500, 750, 1000), expand = c(0,0)) + scale_y_continuous(limits = c(-60, 18), breaks = c(seq(-60, 10, 10)), expand = c(0,0)) +
+  #scale_x_continuous(limits = c(1000, 2000), breaks = c(1000, 1500, 2000), expand = c(0,0)) + scale_y_continuous(limits = c(-75, -30), breaks = c(seq(-70, -30, 10)), expand = c(0,0)) +
+  my_theme
+#750 x 500
 ```
 
-**Field Noise and Playback**
-```{r field_noise_playback, eco = FALSE, message = FALSE}
+**Field Noise**
+```{r field_noise, echo = FALSE, message = FALSE}
+noise <- noise  %>% 
+  mutate(Location = fct_relevel(Location, "Rural", "Urban"))
 noise_sum <- noise  %>% 
-  group_by(Site, Low_Freq) %>% 
-  summarize(mean_leq = mean(Leq),
-            se_leq = plotrix::std.error(Leq))  %>% 
-  mutate(Site = factor(Site),
-         Site = fct_recode(Site, "Urban" = "campus", "Rural" = "popes"),
-         Site = fct_relevel(Site, "Rural", "Urban"))
-
-noise_sum %>% 
+  group_by(Location, Low_Freq) %>% 
+  summarize(mean_power = mean(Power),
+            se_power = plotrix::std.error(Power)) %>% 
   filter(! Low_Freq < 20) %>% 
-  ggplot() +
-    annotate(geom = "rect", ymin = -95, ymax = -13, xmin = range_min, xmax = range_max, fill = "grey90") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_line(aes(x = Low_Freq, y = mean_leq, color = Site), size = 1) +
-  geom_ribbon(aes(x = Low_Freq, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, fill = Site), alpha = 0.5) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Amplitude (Leq, dB)\nQuieter <------------> Louder") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_fill_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-95, -13), breaks = c(-90, -75, -60, -45, -30, -15), expand = c(0,0)) +
-  #scale_x_continuous(expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top")
+  mutate(Location = fct_relevel(Location, "Rural", "Urban"))
 
+# urban loess
 noise_sum_urban <- noise_sum %>% 
-  filter(Site == "Urban",
-         ! Low_Freq < 20)
-urban_dY <- diff(noise_sum_urban$mean_leq)/diff(noise_sum_urban$Low_Freq) 
-urban_dX <- rowMeans(embed(noise_sum_urban$Low_Freq,2))
-derivativeData_u <- data.frame(X = urban_dX, Y = urban_dY, type = "Derivative", Site = "Urban")
-
+  filter(Location == "Urban")
+loess_fit_urban <- loess(mean_power ~ Low_Freq, data = noise_sum_urban, span = 0.5)
+nd <- expand_grid(Low_Freq = round(seq(20, 1000, 5.86), 1),
+                  Location = "Urban")
+predictions_urban <- predict(loess_fit_urban, newdata = nd, se = TRUE)
+predictions_urban <- cbind(nd, predictions_urban)
+# rural loess
 noise_sum_rural <- noise_sum %>% 
-  filter(Site == "Rural",
-         ! Low_Freq < 20)
-rural_dY <- diff(noise_sum_rural$mean_leq)/diff(noise_sum_rural$Low_Freq) 
-rural_dX <- rowMeans(embed(noise_sum_rural$Low_Freq,2))
-derivativeData_r <- data.frame(X = rural_dX, Y = rural_dY, type = "Derivative", Site = "Rural")
+  filter(Location == "Rural")
+loess_fit_rural <- loess(mean_power ~ Low_Freq, data = noise_sum_rural, span = 0.5)
+nd <- expand_grid(Low_Freq = round(seq(20, 1000, 5.86), 1),
+                  Location = "Rural")
+predictions_rural <- predict(loess_fit_rural, newdata = nd, se = TRUE)
+predictions_rural <- cbind(nd, predictions_rural)
+predictions_field <- rbind(predictions_urban, predictions_rural)
+# loess curve 
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = Power, color = Location), linewidth = 0.5, alpha = 0.5, data = noise) +
+  #geom_ribbon(aes(x = Low_Freq, ymin = mean_power - (1.96 * se_power), ymax = mean_power + (1.96 * se_power), fill = Location), data =  noise_sum, alpha = 0.25) +
+  geom_line(aes(x = Low_Freq, y = fit, color = Location), linewidth = 1, data = predictions_field) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - (1.96 * se.fit), ymax = fit + (1.96 * se.fit), fill = Location), data =  predictions_field, alpha = 0.5) +
+  xlab("Frequency (Hz)") +
+  ylab("Relative Amplitude (Inband Power, dB re FS)\nQuieter <----------------------> Louder") +
+  scale_color_manual("", values = two_colors) +
+  scale_fill_manual("", values = two_colors) +
+  scale_x_continuous(limits = c(20, 1000), breaks = c(20, 250, 500, 750, 1000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-106, -61), breaks = c(seq(-100, -70, 10)), expand = c(0,0)) +
+  my_theme
 
-derivativeData <- rbind(derivativeData_u, derivativeData_r) 
+# generalized additive model
+gam_model <- gam(Power ~  Location + s(Low_Freq, by = Location, k = 10), data = noise) #better
+gam_model2 <- gam(Power ~  s(Low_Freq, k = 10), data = noise)
+anova(gam_model2, gam_model, test = "Chisq")
+c(AIC(gam_model), AIC(gam_model2))
+sum1 <- summary(gam_model)
+sum2 <- summary(gam_model2)
+sum1
+sum2
+sum1$pTerms.table
+gam.check(gam_model)
 
-derivativeData2 <- derivativeData %>% 
-  pivot_wider(names_from = "Site", values_from = "Y") %>% 
-  mutate(diff = round(Urban-Rural, 2))
+nd <- data.frame(expand.grid(Low_Freq = seq(20, 1000, 5),
+                             Location = levels(factor(noise$Location))))
+predictions <- data.frame(predict(gam_model, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Location = fct_relevel(Location, "Rural", "Urban"))
 
-ggplot(derivativeData, aes(X,Y, color = Site)) + 
-  geom_line(size = 1) +
-  geom_hline(yintercept = -0.0116700000, linetype = "dashed") +
-  geom_hline(yintercept = -0.0129166667, linetype = "dashed") +
+size = 12
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = Power, color = Location), alpha = 0.25, data = noise) +
+  geom_line(aes(x = Low_Freq, y = fit, color = Location), data = predictions) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - (1.96 * se.fit), ymax = fit + (1.96 * se.fit), fill = Location), alpha = 0.5, data = predictions) +
+  scale_y_continuous(limits = c(-106, -55), breaks = c(seq(-100,-60,10)), expand = c(0,0)) + 
+  scale_x_continuous(limits = c(20, 1100), breaks = c(20, 250, 500, 750, 1000), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  #ylab("Amplitude (dB)\nQuieter <----------------------> Louder") +
+  ylab("Relative Amplitude (Inband Power, dB re FS)\nQuieter <----------------------> Louder") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  my_theme
+#500 x 700
 
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("First Derivative of Amplitude/Frequency") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-0.2, 0.2)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top")
-
-
-#rural_dY2 <- diff(derivativeData_r$Y)/diff(derivativeData_r$X) 
-#rural_dX2 <- rowMeans(embed(derivativeData_r$X,2))
-#derivativeData_r2 <- data.frame(X2 = rural_dX2, Y2 = rural_dY2, type = "Derivative2", Site = "Rural")
-
-#urban_dY2 <- diff(derivativeData_u$Y)/diff(derivativeData_u$X) 
-#urban_dX2 <- rowMeans(embed(derivativeData_u$X,2))
-#derivativeData_u2 <- data.frame(X2 = urban_dX2, Y2 = urban_dY2, type = "Derivative2", Site = "Urban")
-
-#derivativeData2 <- rbind(derivativeData_u2, derivativeData_r2) 
-
-#ggplot(derivativeData2, aes(X2,Y2, color = Site)) + 
-#  geom_line(size = 1) +
-#  geom_hline(yintercept = 0.000095, linetype = "dashed") +
-#  geom_hline(yintercept = 0, linetype = "dashed") +
-#  geom_vline(xintercept = 380, linetype = "dashed", color = #"#1b9e77") +
-#  geom_vline(xintercept = 740, linetype = "dashed", color = #"#d95f02") +
-#  xlab("Frequency (10 Hz Bins)") +
-#  ylab("Second Derivative of Amplitude/Frequency") +
-#  scale_color_manual("Collection Site", values = c("#1b9e77", #"#d95f02")) +
-#  theme_classic() +
-#  scale_y_continuous(limits = c(-0.0010, 0.0010)) +
-#  theme(axis.text = element_text(size = 14, color = "black", #family = "sans"),
-#        axis.title = element_text(size = 14, color = "black", #family = "sans"),
-#        legend.text = element_text(size = 14, color = #"black", family = "sans"),
-#        legend.title = element_text(size = 14, color = #"black", family = "sans"),
-#        legend.position = "top")
-
-
-playback <- read.csv("data/playback.csv")
-
-playback %>% 
-  ggplot() +
-  geom_vline(xintercept = range_min) +
-  geom_vline(xintercept = range_max) +
-  geom_line(aes(x = frequency, y = Leq, group = interaction(tub, treatment), color = treatment)) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Corrected Amplitude (Leq, dB)") +
-  scale_color_manual(values = c("#d95f02", "#1b9e77")) +
-  #scale_y_continuous(limits = c(0, 40), breaks = c(seq(0, 40, 5))) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 12, color = "black"),
-        legend.position = "top")
-
-playback %>%  
-  filter(! frequency < 20) %>% 
-  group_by(treatment, frequency) %>% 
-  summarize(mean_leq = mean(leq_test),
-            se_leq = plotrix::std.error(leq_test)) %>% 
-  ggplot() +
-  annotate(geom = "rect", ymin = -95, ymax = -13, xmin = range_min, xmax = range_max, fill = "grey90") +
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  geom_line(aes(x = frequency, y = mean_leq, color = treatment)) +
-  geom_ribbon(aes(x = frequency, ymin = mean_leq - se_leq, ymax = mean_leq + se_leq, fill = treatment), alpha = 0.5) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Amplitude (Leq, dB)\nQuieter <------------> Louder") +
-  scale_color_manual("Treatment", values = c("#d95f02", "#1b9e77"),
-                     labels = c("Loud", "Quiet")) +
-  scale_fill_manual("Treatment", values = c("#d95f02", "#1b9e77"),
-                     labels = c("Loud", "Quiet")) +
-  scale_y_continuous(limits = c(-95, -13), breaks = c(-90, -75, -60, -45, -30, -15), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top",
-        #legend.key.size = unit(1, "cm")
-        )
+# dreivative calculations
+# urban_dY <- diff(predictions_urban$fit)/diff(predictions_urban$Low_Freq) 
+# urban_dX <- rowMeans(embed(predictions_urban$Low_Freq,2))
+# derivativeData_u <- data.frame(X = urban_dX, Y = urban_dY, type = "Derivative", Site = "Urban")
+# 
+# rural_dY <- diff(predictions_rural$fit)/diff(predictions_rural$Low_Freq) 
+# rural_dX <- rowMeans(embed(predictions_rural$Low_Freq,2))
+# derivativeData_r <- data.frame(X = rural_dX, Y = rural_dY, type = "Derivative", Site = "Rural")
+# 
+# derivativeData <- rbind(derivativeData_u, derivativeData_r) 
+# ggplot(derivativeData, aes(X,Y, color = Site)) + 
+#   geom_line(size = 1) +
+#   geom_hline(yintercept = 0, linetype = "dashed") +
+#   geom_vline(xintercept = 808.2, linetype = "dashed", color = "black") +
+#   xlab("Frequency (Hz)") +
+#   ylab("First Derivative of Amplitude/Frequency") +
+#   scale_color_manual("", values = two_colors) +
+#   scale_x_continuous(limits = c(20, 1000), breaks = c(20, 250, 500, 750, 1000)) +
+#   scale_y_continuous(limits = c(-0.2, 0.2)) +
+#   my_theme
+# 
+# diff <- predictions_field %>% 
+#   dplyr::select(Low_Freq, Location, fit) %>% 
+#   pivot_wider(names_from = "Location", values_from = "fit") %>% 
+#   mutate(diff = Urban-Rural)
 ```
 
-**Stimulus**
-```{r stimulus_example, echo = FALSE, message = FALSE}
-stimulus <- read.csv("data/stimulus.csv") %>% 
-  mutate(centered_leq = center_this(Leq_test)) %>% 
-  filter(!frequency == 0)
+**Playback** 
+```{r Playback, echo = FALSE, message = FALSE}
+# loess curves
+playback_quiet <- playback %>% 
+  filter(Treatment == "Quiet")
+loess_pb_quiet <- loess(snr_db ~ Low_Freq, data = playback_quiet, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(21.5, 1996, 5.38),
+                  Treatment = "Quiet") 
+predictions_pb_quiet <- predict(loess_pb_quiet, newdata = nd, se = TRUE)
+predictions_pb_quiet <- cbind(nd, predictions_pb_quiet)
+playback_loud <- playback %>% 
+  filter(Treatment == "Loud")
+loess_pb_quiet <- loess(snr_db ~ Low_Freq, data = playback_loud, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(21.5, 1996, 5.38),
+                  Treatment = "Loud") 
+predictions_pb_loud <- predict(loess_pb_quiet, newdata = nd, se = TRUE)
+predictions_pb_loud <- cbind(nd, predictions_pb_loud)
+predictions_pb <- rbind(predictions_pb_quiet, predictions_pb_loud) %>% 
+  mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
 
+ggplot() +
+  geom_vline(xintercept = 1000, linetype = "dashed", color = "black") +
+  geom_line(aes(x = Low_Freq, y = snr_db, color = Treatment), linewidth = 0.5, alpha = 0.15, data = playback) +
+  geom_line(aes(x = Low_Freq, y = fit, color = Treatment), data = predictions_pb) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - se.fit, ymax = fit + se.fit, fill = Treatment), alpha = 0.5, data = predictions_pb) +
+    xlab("Frequency (Hz)") +
+  ylab("Amplitude (Signal-to-Noise Ratio, dB)\nQuieter <------------> Louder") +
+  scale_color_manual("Treatment", values = two_colors) +
+  scale_fill_manual("Treatment", values = two_colors) +
+  scale_x_continuous(limits = c(20, 2000), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 65), breaks = c(seq(0, 60, 10)), expand = c(0,0)) +
+  my_theme
+
+# generalized additive model
+gam_model <- gam(snr_db ~  Treatment + s(Low_Freq, by = Treatment, k = 10), data = playback) #better
+gam_model2 <- gam(snr_db ~  s(Low_Freq, k = 10), data = playback)
+anova(gam_model2, gam_model, test = "Chisq")
+c(AIC(gam_model), AIC(gam_model2))
+sum1 <- summary(gam_model)
+sum2 <- summary(gam_model2)
+sum1
+sum2
+sum1$pTerms.table
+gam.check(gam_model)
+
+nd <- data.frame(expand.grid(Low_Freq = seq(0, 2000, 5),
+                             Treatment = levels(factor(playback$Treatment))))
+predictions <- data.frame(predict(gam_model, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+
+size = 12
+ggplot() +
+  geom_vline(xintercept = 1000, color = "black", linetype = "dashed") +
+  geom_line(aes(x = Low_Freq, y = snr_db, color = Treatment), alpha = 0.15, data = playback) +
+  geom_line(aes(x = Low_Freq, y = fit, color = Treatment), data = predictions) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - (1.96 * se.fit), ymax = fit + (1.96 * se.fit), fill = Treatment), alpha = 0.5, data = predictions) +
+  scale_y_continuous(limits = c(-5, 65), breaks = c(seq(0,60,10)), expand = c(0,0)) + 
+  scale_x_continuous(limits = c(0, 2100), breaks = c(0, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Amplitude (Signal-to-Noise Ratio, dB)\nQuieter <----------------------> Louder") +
+  #ylab("Amplitude (dB)\nQuieter <----------------------> Louder") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  my_theme
+# 700 x 700
+```
+
+**Stimulus** 
+```{r stimulus_example, echo = FALSE, message = FALSE}
+# example/stimulus graph with loess
 example <- main %>% 
   filter(SpiderID == "ap109", 
          Distance == "close",
          Position == "a",
          Trial == "1")
 
+loess_stimulus <- loess(snr_db ~ Low_Freq, data = stimulus, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Type = "Stimulus")
+predictions_stimulus <- predict(loess_stimulus, newdata = nd, se = TRUE)
+predictions_stimulus <- cbind(nd, predictions_stimulus)
+
+loess_example <- loess(snr_db ~ Low_Freq, data = example, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Type = "Example")
+predictions_example <- predict(loess_example, newdata = nd, se = TRUE)
+predictions_example <- cbind(nd, predictions_example)
+
+predictions_stimex <- rbind(predictions_stimulus, predictions_example) 
+
+size = 16
 ggplot() +
-  geom_line(aes(x = frequency, y = centered_leq), color = "gold", data = stimulus, size = 2) +
-  geom_line(aes(x = Low_Freq, y = centered_leq), color = "purple", data = example, size = 2) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-  scale_y_continuous(limits = c(-10, 30)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top")
+  geom_line(aes(x = Low_Freq, y = snr_db), color = "gold", data = stimulus, linewidth = 0.5) +
+  geom_line(aes(x = Low_Freq, y = snr_db), color = "purple", data = example, linewidth = 0.5) +
+  geom_line(aes(x = Low_Freq, y = fit, color = Type), data = predictions_stimex) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Type), alpha = 0.5, data = predictions_stimex) +
+  xlab("Frequency (Hz)") +
+  ylab("Amplitude (Signal-to-Noise Ratio, dB)") +
+  #ylab("Amplitude (dB)") +
+  scale_color_manual("",
+                       values = c("purple", "gold"),
+                       labels = c("Example",
+                                 "Stimulus")) +
+  scale_fill_manual("",
+                       values = c("purple", "gold"),
+                       labels = c("Example",
+                                 "Stimulus")) +
+  scale_x_continuous(limits = c(0, 2100), breaks = c(0, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 80, 20), expand = c(0, 0)) +
+  my_theme
+# 800 x 600
+
+# example of attenuation with loess
+atten_stimex <- left_join(stimulus, example, by = "Low_Freq") %>% 
+  dplyr::select(Low_Freq, snr_db.x, snr_db.y) %>% 
+  mutate(snr_db_stim = snr_db.x, 
+         snr_db_ex = snr_db.y,
+         snr_db_att = snr_db_ex - snr_db_stim) %>% 
+  dplyr::select(-snr_db.x, -snr_db.y) %>% 
+  drop_na()
+
+loess_att <- loess(snr_db_att ~ Low_Freq, data = atten_stimex, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5))
+predictions_att <- predict(loess_att, newdata = nd, se = TRUE)
+predictions_att <- cbind(nd, predictions_att)
+
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = snr_db_att), color = "black", data = atten_stimex, linewidth = 0.5) +
+  geom_line(aes(x = Low_Freq, y = fit), data = predictions_att) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - se.fit, ymax = fit + se.fit), alpha = 0.5, data = predictions_att) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
+  scale_x_continuous(limits = c(20, 2100), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-75, 15), breaks = c(seq(-70, 10, 10)), expand = c(0,0)) +
+  my_theme
 ```
 
 # Research Questions
@@ -577,179 +774,148 @@ ggplot() +
 
 **Do webs built by urban and rural spiders under different vibratory conditions differ in the frequency transmission properties?**
 
-```{r close 10hz, echo = FALSE, message = FALSE}
-close_ind1 <- main %>% 
-  filter(Distance == "close",
-         !Site == "Isolated") %>% 
+```{r close, echo = FALSE, message = FALSE}
+# average for each spider
+close_ind1 <- main_att %>% 
+  filter(Distance == "close") %>% 
   group_by(SpiderID, Low_Freq, Site, treatment) %>% 
-  summarise(mean_leq = mean(centered_leq)) %>% 
+  summarise(mean_snr = mean(snr_db_att)) %>% 
   mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site), 
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         SpiderID = factor(SpiderID),
+         Low_Freq = as.numeric(Low_Freq)) %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
+close_ind1 <- data.frame(close_ind1)
 
-close_ind <- close_ind1 %>% 
+# go one step further and average across site x treatment
+close_ind <- main_att %>% 
+  filter(Distance == "close") %>% 
   group_by(Low_Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq))%>% 
+  summarize(SNR = mean(snr_db_att),
+            se_snr = plotrix::std.error(snr_db_att))%>% 
   mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
+         treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
 
-ggplot() +
-  annotate(geom = "rect", ymin = -10, ymax = 20, xmin = range_min, xmax = range_max, fill = "grey90") +
-  #annotate(geom = "rect", ymin = 0, ymax = 30, xmin = range_min, xmax = range_max, fill = "grey90") +
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 0, xmax = 1000, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 1000, xmax = 2000, fill = "grey90") +
-  geom_line(aes(x = Low_Freq, y = Leq, group = Site, color = Site), data = close_ind) +
-  geom_ribbon(aes(x = Low_Freq, ymin = Leq - se, ymax = Leq + se, group = Site, fill = Site), alpha = 0.5, data = close_ind) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-  #ylab("Corrected Amplitude (Leq, dB)") +
-  scale_fill_manual("Collection Site", 
-                    values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  scale_color_manual("Collection Site", 
-                     values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  scale_y_continuous(limits = c(-10, 20), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  #scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30), expand = c(0,0)) +
-  scale_x_continuous(limits = c(0, 2100), breaks = c(seq(0, 2000, 500))) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top") +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 14, color = "black", family="sans"))
-```
-
-```{r far 10hz, echo = FALSE, message = FALSE}
-far_ind1 <- main %>% 
-  filter(Distance == "far",
-         ! Site == "Isolated") %>% 
-  group_by(SpiderID, Low_Freq, Site, treatment) %>% 
-  summarise(mean_leq = mean(centered_leq))  %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-far_ind <- far_ind1 %>% 
-  group_by(Low_Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  #annotate(geom = "rect", ymin = 0, ymax = 30, xmin = range_min, xmax = range_max, fill = "grey90") +
-  annotate(geom = "rect", ymin = -10, ymax = 20, xmin = range_min, xmax = range_max, fill = "grey90") +
-  geom_vline(xintercept = range_min, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = range_max, linetype = "dashed", color = "#d95f02") +
-  geom_line(aes(x = Low_Freq, y = Leq, group = Site, color = Site), data = far_ind) +
-  geom_ribbon(aes(x = Low_Freq, ymin = Leq - se, ymax = Leq + se, group = Site, fill = Site), alpha = 0.5, data = far_ind) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-  #ylab("Corrected Amplitude (Leq, dB)") +
-  scale_fill_manual("Collection Site", 
-                    values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  scale_color_manual("Collection Site", 
-                     values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  scale_y_continuous(limits = c(-10, 20), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  #scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30), expand = c(0,0)) +
-  scale_x_continuous(limits = c(0, 2100), breaks = c(seq(0, 2000, 500))) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top") +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 14, color = "black", family="sans"))
-```
-
-```{r close 1000 Hz, echo = FALSE, message = FALSE}
-close_1000 <- main %>% 
-  filter(Distance == "close",
-         ! Site == "Isolated") %>% 
-  mutate(Freq = ifelse(Low_Freq <= 990, "0-1000", "1000-2000")) %>% 
-  mutate(day = mdy(start_date)) %>% 
-  group_by(SpiderID, Site, treatment, Freq, day) %>% 
-  summarize(mean_leq = mean(centered_leq)) %>% 
-  ungroup() %>% 
-  #mutate(mean_leq = as.integer(mean_leq)) %>% 
-  mutate(Freq = factor(as.character(Freq)),
-         Freq = fct_relevel(Freq, "0-1000", "1000-2000")) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud")) 
-
-# raw data
-close_1000 %>% 
-  group_by(Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
-  ggplot() +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[5]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[5]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey90") +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[1]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[1]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -0.4, ymax = 0.4, xmax = "0-1000", xmin = -Inf, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 1000, xmax = 2000, fill = "grey90") +
-  geom_line(aes(x = Freq, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1) +
-  geom_point(aes(x = Freq, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5) +
-  geom_errorbar(aes(x = Freq, ymin = Leq - se, ymax = Leq + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1) +
-  xlab("Frequency (1000 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  #ylab("Corrected Amplitude (Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  #scale_y_continuous(limits = c(-0.4, 0.4)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "none",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
-
-shapiro.test(close_1000$mean_leq)
-model_close_1000 <- lmer(mean_leq ~ Site * treatment * Freq + (1|SpiderID), data = close_1000)
-car::Anova(model_close_1000, type = "II")
-emmeans(model_close_1000, pairwise ~ Freq|Site:treatment, adjust = "holm")$contrasts
-
-# non-parametric test
-close_1000_rl <- close_1000 %>% 
-  filter(Site == "Rural",
-         treatment == "Loud")
-kruskal.test(mean_leq ~ Freq, data = close_1000_rl)
-close_1000_rq <- close_1000 %>% 
-  filter(Site == "Rural",
-         treatment == "Quiet")
-kruskal.test(mean_leq ~ Freq, data = close_1000_rq)
-close_1000_ul <- close_1000 %>% 
+# get the loess curve of urban loud from the average
+close_ind1_ul <- close_ind1 %>% 
   filter(Site == "Urban",
          treatment == "Loud")
-kruskal.test(mean_leq ~ Freq, data = close_1000_ul)
-close_1000_uq <- close_1000 %>% 
+loess_close_ul <- loess(mean_snr ~ Low_Freq, data = close_ind1_ul, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Urban",
+                  treatment = "Loud")
+predictions_ul <- predict(loess_close_ul, newdata = nd, se = TRUE)
+predictions_ul <- cbind(nd, predictions_ul)
+
+# get the loess curve of rural loud from the average
+close_ind1_rl <- close_ind1 %>% 
+  filter(Site == "Rural",
+         treatment == "Loud")
+loess_close_rl <- loess(mean_snr ~ Low_Freq, data = close_ind1_rl, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Rural",
+                  treatment = "Loud")
+predictions_rl <- predict(loess_close_rl, newdata = nd, se = TRUE)
+predictions_rl <- cbind(nd, predictions_rl)
+
+# get the loess curve of urban quiet from the average
+close_ind1_uq <- close_ind1 %>% 
   filter(Site == "Urban",
          treatment == "Quiet")
-kruskal.test(mean_leq ~ Freq, data = close_1000_uq)
+loess_close_uq <- loess(mean_snr ~ Low_Freq, data = close_ind1_uq, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Urban",
+                  treatment = "Quiet")
+predictions_uq <- predict(loess_close_uq, newdata = nd, se = TRUE)
+predictions_uq <- cbind(nd, predictions_uq)
+
+# get the loess curve of rural quiet from the average
+close_ind1_rq <- close_ind1 %>% 
+  filter(Site == "Rural",
+         treatment == "Quiet")
+loess_close_rq <- loess(mean_snr ~ Low_Freq, data = close_ind1_rq, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Rural",
+                  treatment = "Quiet")
+predictions_rq <- predict(loess_close_rq, newdata = nd, se = TRUE)
+predictions_rq <- cbind(nd, predictions_rq)
+
+predictions_close <- rbind(predictions_ul, predictions_uq, predictions_rl, predictions_rq) %>% 
+  mutate(treatment = fct_relevel(factor(treatment), "Quiet", "Loud"))
+
+ggplot() +
+  geom_vline(xintercept = 1000, linetype = "dashed", color = "black") +
+  geom_line(aes(x = Low_Freq, y = SNR, group = Site, color = Site), data = close_ind, alpha = 0.25) +
+  geom_line(aes(x = Low_Freq, y = fit, group = Site, color = Site), data = predictions_close) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - (1.96 * se.fit), ymax = fit + (1.96 * se.fit), group = Site, fill = Site), alpha = 0.5, data = predictions_close) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  scale_x_continuous(limits = c(20, 2100), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+    scale_y_continuous(limits = c(-70, 15), breaks = c(seq(-60, 10, 10)), expand = c(0,0)) +
+  my_theme +
+  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs))
+
+# generalize additive model
+gam_model <- gam(mean_snr ~  Site_Treatment + s(Low_Freq, by = Site_Treatment, k = 10), data = close_ind1)
+gam_model_null <- gam(mean_snr ~ 1, data = close_ind1)
+anova(gam_model_null, gam_model, test = "F")
+c(AIC(gam_model), AIC(gam_model_null))
+sum1 <- summary(gam_model)
+sum1
+sum1$pTerms.table
+gam.check(gam_model)
+
+nd <- data.frame(expand.grid(Low_Freq = seq(0, 2000, 5),
+                             Site = levels(factor(close_ind1$Site)),
+                             treatment = levels(factor(close_ind1$treatment))))
+nd <- nd %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE)
+predictions <- data.frame(predict(gam_model, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site_Treatment = fct_relevel(factor(Site_Treatment), "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
+
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = SNR, color = Site_Treatment, linetype = Site_Treatment), alpha = 0.15, data = close_ind) +
+  geom_vline(aes(xintercept = 1000), linetype = "dashed") +
+  geom_hline(aes(yintercept = 0), linetype = "solid") +
+  #geom_vline(aes(xintercept = 250), linetype = "dashed") +
+  #geom_vline(aes(xintercept = 950), linetype = "dashed") +
+  geom_line(aes(x = Low_Freq, y = fit, color = Site_Treatment, linetype = Site_Treatment), linewidth = 1, data = predictions) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - (1.96 * se.fit), ymax = fit + (1.96 * se.fit), fill = Site_Treatment), alpha = 0.5, data = predictions) +
+  #scale_y_continuous(limits = c(-70, -43), breaks = c(seq(-70,-45, 5)), expand = c(0,0)) + scale_x_continuous(limits = c(900, 2100), breaks = c(seq(1000,2000,250)), expand = c(0,0)) +
+  #scale_y_continuous(limits = c(-60, 3), breaks = c(seq(-50,0,10)),expand = c(0,0)) + scale_x_continuous(limits = c(0, 1100), breaks = c(0, 250, 500, 750, 1000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-63, 3), breaks = c(seq(-60, 0, 10)), expand = c(0,0)) +   scale_x_continuous(limits = c(0, 2100), breaks = c(0, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
+  scale_fill_manual("Site_Treatment", values = c("#1b9e77", "#d95f02", "#1b9e77", "#d95f02")) +
+  scale_color_manual("Site_Treatment", values = c("#1b9e77", "#d95f02", "#1b9e77", "#d95f02")) +
+  scale_linetype_manual("Site_Treatment", values = c("dashed", "dashed", "solid", "solid")) +
+  my_theme +
+  #theme(legend.position = "none") +
+  guides(color = guide_legend(nrow = 2, override.aes = list(linewidth = 0.5))) +
+  guides(fill = guide_legend(nrow = 2)) 
+# 800 x 600
+# 300 x 400
 
 # assumptions
-test_close <- augment(model_close_1000, data = close_1000)
+test_close <- augment(gam_model, data = close_ind1)
 resid_close <- ggplot(test_close, aes(x = .fitted, y = .resid)) + 
   geom_point() + 
   geom_smooth() +
   geom_hline(yintercept = 0) +
   xlab("Fitted Values") +
   ylab("Standardized \nResiduals") +
-  theme_classic() +
-  theme(text = element_text(size = 14, color = "black")) +
-  theme(axis.text.x=element_text(color="black", size=14)) + 
-  theme(axis.text.y=element_text(color="black", size=14))
+  my_theme
 
 y <- quantile(test_close$.resid, c(0.25, 0.75))
 x <- qnorm(c(0.25, 0.75))
@@ -761,141 +927,227 @@ qq_close <- ggplot(test_close, aes(sample = .resid)) +
   geom_abline(slope = slope, intercept = int) +
   xlab("Theoretical Quantiles") +
   ylab("Sample Quantiles") +
-  theme_classic() +
-  theme(text = element_text(size = 14, color = "black")) +
-  theme(axis.text.x=element_text(color="black", size=14)) + 
-  theme(axis.text.y=element_text(color="black", size=14)) 
-
-cd<-data.frame(cooks.distance(model_close_1000)) 
-cd$num <- seq(1, nrow(cd), 1)
-colnames(cd) <- c("Cooksd", "Num")
-lev<-data.frame(hat(model.matrix(model_close_1000)))
-lev$num <- seq(1, nrow(lev), 1)
-colnames(lev) <- c("Leverage", "Num")
-data_close <- full_join(cd, lev, by = "Num")
-lev_close <- data_close %>% 
-  pivot_longer(cols = c(Leverage, Cooksd), names_to = "Variable", values_to = "Value") %>% 
-  ggplot(aes(x = Num, y = Value, color = Variable)) +
-  geom_hline(yintercept = 4/60) +
-  geom_point() +
-  theme_classic() +
-  theme(legend.position = c(0.25, 0.75))
-
-hist_close <- data.frame(ranef = ranef(model_close_1000))
-hist_close2 <-hist_close[order(hist_close$ranef.condval),]
-ran_ef_close <- hist_close2 %>% 
-  ggplot(aes(y = ranef.grp, x = ranef.condval)) +
-  geom_point() +
-  geom_vline(xintercept = 0) +
-  geom_linerange(aes(xmin = ranef.condval - 1.96 * ranef.condsd, xmax = ranef.condval + 1.96 * ranef.condsd)) +
-  theme_classic() +
-  xlab("Value of the Conditional Mean") +
-  ylab("Site")
-
-
-annotate_figure(ggarrange(resid_close, qq_close, lev_close, ran_ef_close,
-          labels = c("A", "B", "C", "D"),
-          ncol = 2, nrow = 2))
-
-# graph predictions
-nd = data.frame(expand_grid(Site = levels(factor(close_1000$Site)),
-                treatment = levels(factor(close_1000$treatment)),
-                Freq = levels(factor(close_1000$Freq))))
-
-nd$fit <- predict(model_close_1000, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")
-
-#bigBoot_close_1000 <- bootMer(model_close_1000, bootStrap, nsim = 1000)
-#saveRDS(bigBoot_close_1000, file = "boots/bigBoot_close_1000.Rds")
-bigBoot_close_1000 <- readRDS("boots/bigBoot_close_1000.Rds")
-predSE <- t(apply(bigBoot_close_1000$t, MARGIN = 2, FUN = sd))
-nd$SE <- predSE[1, ]
-nd <- nd %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  geom_jitter(aes(x = Freq, y = mean_leq, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = close_1000) +
-  geom_line(aes(x = Freq, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
-  geom_point(aes(x = Freq, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
-  geom_errorbar(aes(x = Freq, ymin = fit - SE, ymax = fit + SE, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
-  xlab("Frequency (1000 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-7, 7), breaks = c(-6, -3, 0, 3, 6)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "none",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
+  my_theme
+ggarrange(resid_close, qq_close)
 ```
 
-```{r far 1000 Hz, echo = FALSE, message = FALSE}
-far_1000 <- main %>% 
-  filter(Distance == "far",
-         ! Site == "Isolated") %>% 
-  mutate(Freq = ifelse(Low_Freq <= 990, "0-1000", "1000-2000")) %>% 
-  mutate(day = mdy(start_date)) %>% 
-  group_by(SpiderID, Site, treatment, Freq, day) %>% 
-  summarize(mean_leq = mean(centered_leq)) %>% 
-  ungroup() %>% 
-  #mutate(mean_leq = as.integer(mean_leq)) %>% 
-  mutate(Freq = factor(as.character(Freq)),
-         Freq = fct_relevel(Freq, "0-1000", "1000-2000"))
+```{r far, echo = FALSE, message = FALSE}
+# average for each spider
+far_ind1 <- main_att %>% 
+  filter(Distance == "far") %>% 
+  group_by(SpiderID, Low_Freq, Site, treatment) %>% 
+  summarise(mean_snr = mean(snr_db_att)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site), 
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         Low_Freq = as.numeric(Low_Freq)) %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
+far_ind1 <- data.frame(far_ind1)
 
-far_1000 %>% 
-  group_by(Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
-  ggplot() +
-  geom_line(aes(x = Freq, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1) +
-  geom_point(aes(x = Freq, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5) +
-  geom_errorbar(aes(x = Freq, ymin = Leq - se, ymax = Leq + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1) +
-  xlab("Frequency (1000 Hz Bins)") +
-  ylab("Relative Amplitude \n(Centered and Scaled Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  #scale_y_continuous(limits = c(-0.4, 0.4)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "none",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
+# go one step further and average across site x treatment
+far_ind <- main_att %>% 
+  filter(Distance == "far") %>% 
+  group_by(Low_Freq, Site, treatment) %>% 
+  summarize(SNR = mean(snr_db_att),
+            se_snr = plotrix::std.error(snr_db_att))%>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site),
+         Site = fct_relevel(Site, "Rural", "Urban")) %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE) %>% 
+  mutate(Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
 
-shapiro.test(far_1000$mean_leq)
-model_far_1000 <- lmer(mean_leq ~ Site * treatment * Freq + (1|SpiderID), data = far_1000)
-car::Anova(model_far_1000)
-emmeans(model_far_1000, pairwise ~ Freq|Site,  by = "treatment")$contrasts
-
-# non-parametric test
-far_1000_rl <- far_1000 %>% 
-  filter(Site == "Rural",
-         treatment == "Loud")
-kruskal.test(mean_leq ~ Freq, data = far_1000_rl)
-far_1000_rq <- far_1000 %>% 
-  filter(Site == "Rural",
-         treatment == "Quiet")
-kruskal.test(mean_leq ~ Freq, data = far_1000_rq)
-far_1000_ul <- far_1000 %>% 
+# get the loess curve of urban loud from the average
+far_ind1_ul <- far_ind1 %>% 
   filter(Site == "Urban",
          treatment == "Loud")
-kruskal.test(mean_leq ~ Freq, data = far_1000_ul)
-far_1000_uq <- far_1000 %>% 
+loess_far_ul <- loess(mean_snr ~ Low_Freq, data = far_ind1_ul, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Urban",
+                  treatment = "Loud")
+predictions_far_ul <- predict(loess_far_ul, newdata = nd, se = TRUE)
+predictions_far_ul <- cbind(nd, predictions_far_ul)
+
+# get the loess curve of rural loud from the average
+far_ind1_rl <- far_ind1 %>% 
+  filter(Site == "Rural",
+         treatment == "Loud")
+loess_far_rl <- loess(mean_snr ~ Low_Freq, data = far_ind1_rl, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Rural",
+                  treatment = "Loud")
+predictions_far_rl <- predict(loess_far_rl, newdata = nd, se = TRUE)
+predictions_far_rl <- cbind(nd, predictions_far_rl)
+
+# get the loess curve of urban quiet from the average
+far_ind1_uq <- far_ind1 %>% 
   filter(Site == "Urban",
          treatment == "Quiet")
-kruskal.test(mean_leq ~ Freq, data = far_1000_uq)
+loess_far_uq <- loess(mean_snr ~ Low_Freq, data = far_ind1_uq, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Urban",
+                  treatment = "Quiet")
+predictions_far_uq <- predict(loess_far_uq, newdata = nd, se = TRUE)
+predictions_far_uq <- cbind(nd, predictions_far_uq)
 
+# get the loess curve of rural quiet from the average
+far_ind1_rq <- far_ind1 %>% 
+  filter(Site == "Rural",
+         treatment == "Quiet")
+loess_far_rq <- loess(mean_snr ~ Low_Freq, data = far_ind1_rq, span = 0.5)
+nd <- expand_grid(Low_Freq = seq(20, 2000, 5),
+                  Site = "Rural",
+                  treatment = "Quiet")
+predictions_far_rq <- predict(loess_far_rq, newdata = nd, se = TRUE)
+predictions_far_rq <- cbind(nd, predictions_far_rq)
+
+predictions_far <- rbind(predictions_far_ul, predictions_far_uq, predictions_far_rl, predictions_far_rq) %>% 
+  mutate(treatment = fct_relevel(factor(treatment), "Quiet", "Loud"),
+         Site = fct_relevel(factor(Site), "Rural", "Urban"))
+
+ggplot() +
+  geom_vline(xintercept = 1000, linetype = "dashed", color = "black") +
+  geom_line(aes(x = Low_Freq, y = SNR, group = Site, color = Site), data = far_ind, alpha = 0.25) +
+  geom_line(aes(x = Low_Freq, y = fit, group = Site, color = Site), data = predictions_far) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - se.fit, ymax = fit + se.fit, group = Site, fill = Site), alpha = 0.5, data = predictions_far) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  scale_y_continuous(limits = c(-72, 15), breaks = c(seq(-60,10, 10)), expand = c(0,0)) +
+  scale_x_continuous(limits = c(20, 2100), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  my_theme +
+  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) 
+
+# generalized additive model
+gam_model <- gam(mean_snr ~ Site_Treatment + s(Low_Freq, by = Site_Treatment, k = 10), data = far_ind1)
+gam_model_null <- gam(mean_snr ~ 1, data = far_ind1)
+anova(gam_model_null, gam_model, test = "F")
+c(AIC(gam_model), AIC(gam_model_null))
+sum1 <- summary(gam_model)
+sum1
+sum1$pTerms.table
+gam.check(gam_model)
+
+nd <- data.frame(expand.grid(Low_Freq = seq(0, 2000, 5),
+                             Site = levels(factor(far_ind1$Site)),
+                             treatment = levels(factor(far_ind1$treatment))))
+nd <- nd %>% 
+  unite("Site_Treatment", Site, treatment, sep = "_", remove = FALSE)
+predictions <- data.frame(predict(gam_model, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site_Treatment = fct_relevel(factor(Site_Treatment), "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"))
+
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = SNR, color = Site_Treatment), alpha = 0.15, data = far_ind) +
+  #geom_vline(aes(xintercept = 300), linetype = "dashed") +
+  #geom_vline(aes(xintercept = 600), linetype = "dashed") +
+  geom_vline(aes(xintercept = 1000), linetype = "dashed") +
+  geom_hline(aes(yintercept = 0), linetype = "solid") +
+  geom_line(aes(x = Low_Freq, y = fit, color = Site_Treatment, linetype = Site_Treatment), linewidth = 1, data = predictions) +
+  geom_ribbon(aes(x = Low_Freq, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site_Treatment), alpha = 0.5, data = predictions) +
+  #scale_y_continuous(limits = c(-72, -33), breaks = c(seq(-70,-35, 5)), expand = c(0,0)) + scale_x_continuous(limits = c(900, 2100), breaks = c(seq(1000,2000,250)), expand = c(0,0)) +
+  #scale_y_continuous(limits = c(-60, 15), breaks = c(seq(-50,10,10)),expand = c(0,0)) + scale_x_continuous(limits = c(0, 1100), breaks = c(0, 250, 500, 750, 1000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-72, 15), breaks = c(seq(-60, 10, 10)), expand = c(0,0)) + scale_x_continuous(limits = c(0, 2100), breaks = c(0, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Attenuation (∆ dB)") +
+  scale_fill_manual("Site_Treatment", values = c("#1b9e77", "#d95f02", "#1b9e77", "#d95f02")) +
+  scale_color_manual("Site_Treatment", values = c("#1b9e77", "#d95f02", "#1b9e77", "#d95f02")) +
+  scale_linetype_manual("Site_Treatment", 
+                     values = c("dashed", "dashed", "solid", "solid")) +
+  my_theme +
+  #theme(legend.position = "none") +
+  guides(color = guide_legend(nrow = 2, override.aes = list(linewidth = 0.5))) +
+  guides(fill = guide_legend(nrow = 2)) 
 
 # assumptions
-test_far <- augment(model_far_1000, data = far_1000)
-resid_far <- ggplot(test_far, aes(x = .fitted, y = .resid)) + 
+test_close <- augment(gam_model, data = far_ind1)
+resid_close <- ggplot(test_close, aes(x = .fitted, y = .resid)) + 
+  geom_point() + 
+  geom_smooth() +
+  geom_hline(yintercept = 0) +
+  xlab("Fitted Values") +
+  ylab("Standardized \nResiduals") +
+  my_theme
+
+y <- quantile(test_close$.resid, c(0.25, 0.75))
+x <- qnorm(c(0.25, 0.75))
+slope <- diff(y)/diff(x)
+int <- y[1L] - slope * x[1L]
+
+qq_close <- ggplot(test_close, aes(sample = .resid)) + 
+  stat_qq() + 
+  geom_abline(slope = slope, intercept = int) +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  my_theme
+
+ggarrange(resid_close, qq_close)
+```
+
+**Silk Analysis**
+
+```{r silk_mass, echo = FALSE, message = FALSE}
+silk <- main %>% 
+  ungroup() %>% 
+  filter(! Site == "Isolated") %>% 
+  dplyr::select(SpiderID, Site, treatment, trial_age, mass_mg, wet_mg, dry_mg, moisture_per) %>% 
+  unique() %>% 
+  mutate(dry_microg = dry_mg * 1000,
+         dry_microg_body_mg = dry_microg / mass_mg,
+         wet_microg = wet_mg * 1000,
+         wet_microg_body_mg = wet_microg / mass_mg,
+         moisture_per_body_mg = moisture_per / mass_mg,
+         moisture_per = as.numeric(moisture_per) / 100,
+         treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
+  filter(! dry_mg == 0) 
+
+# raw data
+silk_sum <- silk %>% 
+  group_by(Site, treatment) %>% 
+  summarize(mean_silk = mean(dry_microg_body_mg), 
+            se_silk = plotrix::std.error(dry_microg_body_mg))
+
+silk_sum %>% 
+  ggplot() +
+  geom_point(aes(x = treatment, y = mean_silk, group = Site, color = Site)) +
+  geom_errorbar(aes(x = treatment, ymin = mean_silk - se_silk, ymax = mean_silk + se_silk, group = Site, color = Site), width = 0.25) +
+  xlab("Treatment") +
+  ylab("Dry Silk Mass (µg) Corrected by Body Mass (mg)") +
+  scale_fill_manual(values = c("#1b9e77", "#d95f02"),
+                     labels = c("Rural", "Urban")) +
+  scale_color_manual(values = c("#1b9e77", "#d95f02"),
+                     labels = c("Rural", "Urban")) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 14, color = "black"),
+        axis.title = element_text(size = 14, color = "black"),
+        legend.text = element_text(size = 14, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.position = "top")
+
+shapiro.test(sqrt(silk$dry_microg_body_mg))
+silk_model <- lm(sqrt(dry_microg_body_mg) ~ Site * treatment, data = silk)
+car::Anova(silk_model)
+#emmeans(silk_model, pairwise ~ treatment,  by = "Site")$contrasts
+#emmeans(silk_model, pairwise ~ Site,  by = "treatment")$contrasts
+
+# not normal
+silk_loud <- silk %>% 
+  filter(treatment == "Loud")
+kruskal.test(dry_microg_body_mg ~ Site, data = silk_loud)
+silk_quiet <- silk %>% 
+  filter(treatment == "Quiet")
+kruskal.test(dry_microg_body_mg ~ Site, data = silk_quiet)
+
+# assumptions
+test_silk <- augment(silk_model, data = silk)
+resid_silk <- ggplot(test_silk, aes(x = .fitted, y = .resid)) + 
   geom_point() + 
   geom_smooth() +
   geom_hline(yintercept = 0) +
@@ -906,12 +1158,12 @@ resid_far <- ggplot(test_far, aes(x = .fitted, y = .resid)) +
   theme(axis.text.x=element_text(color="black", size=14)) + 
   theme(axis.text.y=element_text(color="black", size=14))
 
-y <- quantile(test_far$.resid, c(0.25, 0.75))
+y <- quantile(test_silk$.resid, c(0.25, 0.75))
 x <- qnorm(c(0.25, 0.75))
 slope <- diff(y)/diff(x)
 int <- y[1L] - slope * x[1L]
 
-qq_far <- ggplot(test_far, aes(sample = .resid)) + 
+qq_silk <- ggplot(test_silk, aes(sample = .resid)) + 
   stat_qq() + 
   geom_abline(slope = slope, intercept = int) +
   xlab("Theoretical Quantiles") +
@@ -921,377 +1173,200 @@ qq_far <- ggplot(test_far, aes(sample = .resid)) +
   theme(axis.text.x=element_text(color="black", size=14)) + 
   theme(axis.text.y=element_text(color="black", size=14)) 
 
-cd<-data.frame(cooks.distance(model_far_1000)) 
-cd$num <- seq(1, nrow(cd), 1)
-colnames(cd) <- c("Cooksd", "Num")
-lev<-data.frame(hat(model.matrix(model_far_1000)))
-lev$num <- seq(1, nrow(lev), 1)
-colnames(lev) <- c("Leverage", "Num")
-data_far <- full_join(cd, lev, by = "Num")
-lev_far <- data_far %>% 
-  pivot_longer(cols = c(Leverage, Cooksd), names_to = "Variable", values_to = "Value") %>% 
-  ggplot(aes(x = Num, y = Value, color = Variable)) +
-  geom_hline(yintercept = 4/60) +
-  geom_point() +
-  theme_classic() +
-  theme(legend.position = c(0.25, 0.75))
+# predictions
+nd = data.frame(expand_grid(Site = levels(factor(silk$Site)),
+                treatment = levels(factor(silk$treatment))))
 
-hist_far <- data.frame(ranef = ranef(model_far_1000))
-hist_far2 <-hist_far[order(hist_far$ranef.condval),]
-ran_ef_far <- hist_far2 %>% 
-  ggplot(aes(y = ranef.grp, x = ranef.condval)) +
-  geom_point() +
-  geom_vline(xintercept = 0) +
-  geom_linerange(aes(xmin = ranef.condval - 1.96 * ranef.condsd, xmax = ranef.condval + 1.96 * ranef.condsd)) +
-  theme_classic() +
-  xlab("Value of the Conditional Mean") +
-  ylab("Site")
-
-annotate_figure(ggarrange(resid_far, qq_far, lev_far, ran_ef_far,
-          labels = c("A", "B", "C", "D"),
-          ncol = 2, nrow = 2))
-
-# graph predictions
-nd = data.frame(expand_grid(Site = levels(factor(far_1000$Site)),
-                treatment = levels(factor(far_1000$treatment)),
-                Freq = levels(factor(far_1000$Freq))))
-
-nd$fit <- predict(model_far_1000, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")
-
-#bigBoot_far_1000 <- bootMer(model_far_1000, bootStrap, nsim = 1000)
-#saveRDS(bigBoot_far_1000, file = "boots/bigBoot_far_1000.Rds")
-bigBoot_far_1000 <- readRDS("boots/bigBoot_far_1000.Rds")
-predSE <- t(apply(bigBoot_far_1000$t, MARGIN = 2, FUN = sd))
-nd$SE <- predSE[1, ]
+nd$fit <- predict(silk_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$fit
+nd$SE <- predict(silk_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$se.fit
 nd <- nd %>% 
   mutate(treatment = factor(treatment),
          treatment = fct_relevel(treatment, "Quiet", "Loud"))
 
 ggplot() +
-  geom_jitter(aes(x = Freq, y = mean_leq, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = close_1000) +
-  geom_line(aes(x = Freq, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
-  geom_point(aes(x = Freq, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
-  geom_errorbar(aes(x = Freq, ymin = fit - SE, ymax = fit + SE, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
-  xlab("Frequency (1000 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-7, 7), breaks = c(-6, -3, 0, 3, 6)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "none",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
+  geom_jitter(aes(x = treatment, y = dry_microg_body_mg, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = silk) +
+  geom_line(aes(x = treatment, y = fit^2, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
+  geom_point(aes(x = treatment, y = fit^2, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
+  geom_errorbar(aes(x = treatment, ymin = (fit - 1.96 * SE)^2, ymax = (fit + 1.96 * SE)^2, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
+  xlab("Treatment (4 Days)") +
+  ylab("Dry Silk Mass (µg) \nCorrected by Body Mass (mg)") +
+  scale_color_manual("", values = c("#1b9e77", "#d95f02")) +
+  scale_y_continuous(limits = c(0, 26), breaks = c(0, 5, 10, 15, 20, 25), expand = c(0,0)) +
+  my_theme
 ```
 
-```{r stats_table, echo = FALSE, message = FALSE}
-bins_stats <- read.csv(file = "tables/bins_table.csv", header = TRUE) %>% 
-  mutate(p_value = factor(p_value),
-         p_value = fct_recode(p_value, 
-                        "  0.002 **" = "0.002",
-                        "< 0.001 ***" = "0.001",
-                        "  0.219" = "0.2193",
-                        "  0.040 *" = "0.04",
-                        "  0.017 *" = "0.017",
-                        "  0.330" = "0.33",
-                        "  0.015 *" = "0.015")) 
+```{r silk_moisture, echo = FALSE, message = FALSE}
+# raw data
+moist_sum <- silk %>% 
+  group_by(Site, treatment) %>% 
+  summarize(mean_moist = mean(moisture_per), 
+            se_moist = plotrix::std.error(moisture_per)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"))
 
-colnames(bins_stats) <- c('Distance', 'Residual DF', 'Collection Site', 'Treatment', '0-1000 Hz \nMean (SE)', '1000-2000 Hz \nMean (SE)',  'Test Statistic', 'P-Value')
+moist_sum %>% 
+  ggplot() +
+  geom_point(aes(x = treatment, y = mean_moist, group = Site, color = Site)) +
+  geom_errorbar(aes(x = treatment, ymin = mean_moist - se_moist, ymax = mean_moist + se_moist, group = Site, color = Site), width = 0.25) +
+  xlab("Treatment") +
+  ylab("Percent Silk Moisture") +
+  scale_fill_manual(values = c("#1b9e77", "#d95f02")) +
+  scale_color_manual(values = c("#1b9e77", "#d95f02")) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 12, color = "black"),
+        legend.position = "top")
 
-flextable(bins_stats[, 1:8]) %>% 
+shapiro.test(sqrt(silk$moisture_per))
+moist_model <- lm(sqrt(moisture_per) ~ Site * treatment, data = silk)
+car::Anova(moist_model)
+
+#moist_model <- betareg(moisture_per ~ Site * treatment, data = silk)
+#car::Anova(moist_model)
+
+# not normal
+silk_urban <- silk %>% 
+  filter(Site == "Urban")
+kruskal.test(moisture_per ~ treatment, data = silk_urban)
+silk_rural <- silk %>% 
+  filter(Site == "Rural")
+kruskal.test(moisture_per ~ treatment, data = silk_rural)
+
+emmeans(moist_model, pairwise ~ treatment,  by = "Site")$contrasts
+emmeans(moist_model, pairwise ~ Site,  by = "treatment")$contrasts
+
+# predictions
+nd = data.frame(expand_grid(Site = levels(factor(silk$Site)),
+                treatment = levels(factor(silk$treatment))))
+
+nd$fit <- predict(moist_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$fit
+nd$se <- predict(moist_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$se.fit
+nd <- nd %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"))
+
+ggplot() +
+  geom_jitter(aes(x = treatment, y = moisture_per, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = silk) +
+  geom_line(aes(x = treatment, y = fit^2, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
+  geom_point(aes(x = treatment, y = fit^2, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
+  geom_errorbar(aes(x = treatment, ymin = (fit - 1.96 * se)^2, ymax = (fit + 1.96 * se)^2, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
+  xlab("Treatment (4 Days)") +
+  ylab("Proportion of Silk Moisture") +
+  scale_color_manual("", values = c("#1b9e77", "#d95f02")) +
+  scale_y_continuous(limits = c(0, 0.6), breaks = c(0, 0.2, 0.4, 0.6), expand = c(0,0)) +
+  my_theme
+
+```
+
+```{r silk stats, echo = FALSE, message = FALSE}
+silk_stats <- read.csv(file = "tables/silk_table.csv", header = TRUE) %>% 
+  mutate(dependent = factor(dependent),
+         dependent = fct_recode(dependent, "Dry Silk Mass (µg) per Body Mass (mg)" = "silk_mass", 
+                            "Prop. Silk Moisture" = "silk_moist"),
+         independent = factor(independent),
+         independent = fct_recode(independent, "Collection Site" = "Site",
+                               "Treatment" = "Treatment",
+                               "Collection Site x Treatment" = "Site_Treatment"),
+         df = factor(df),
+         df = fct_recode(df, " 56" = "56", "56" = "_56"),
+         p_value = factor(p_value),
+         p_value = fct_recode(p_value, "   0.117" = "0.117",
+                        "   0.777" = "0.777",
+                        "   0.124" = "0.124",
+                        "   0.463" = "0.463",
+                        "   0.089 ." = "0.089",
+                        "   0.157" = "0.157")) 
+
+colnames(silk_stats) <- c('Dependent Variable', 'Residual DF', 'Independent Variable', 'F-Value', 'P-Value')
+
+flextable(silk_stats[, 1:5]) %>% 
   autofit() %>% 
-  merge_v(j = c('Distance', 'Residual DF'), part = "body") %>% 
+  merge_v(j = c('Dependent Variable', 'Residual DF'), part = "body") %>% 
   theme_vanilla() %>% 
-  hline(i = c("1", "2", "3", "5", "6", "7"), 
-        j = c("Collection Site", "Treatment", '0-1000 Hz \nMean (SE)', '1000-2000 Hz \nMean (SE)',  'Test Statistic', 'P-Value'), 
+  hline(i = c("1", "2", "4", "5"), 
+        j = c("Independent Variable", "F-Value", "P-Value"), 
         part = "body", 
         border = officer::fp_border(width = 0, color = "black")) %>% 
   bold(bold = TRUE, part = "header") %>% 
   fontsize(size = 10, part = "all") %>% 
   align(align = "left", part = "all") %>%
-  valign(valign = "top", part = "all") %>% 
-    footnote(i = c(1), j = 1, part = "body", ref_symbols = "a", value = as_paragraph("Results of pairwise comparison following a linear mixed effects model with t-ratio as the test statistic.")) %>%
-  footnote(i = c(5), j = 1, ref_symbols = "b", value = as_paragraph("Results of individual Kruskal-Wallis tests following subsetting by collection site and treatment with a chi-squared value as the test statistic.")) #%>% 
-  #save_as_image(path = here::here("bins_table.png"))
-```
-
-```{r close noise range, Hz, echo = FALSE, message = FALSE}
-close_noise <- main %>% 
-  filter(Distance == "close",
-         ! Site == "Isolated") %>% 
-  filter(Low_Freq < range_max & Low_Freq >= range_min) %>% 
-  mutate(day = mdy(start_date)) %>% 
-  group_by(SpiderID, Site, treatment, day) %>% 
-  summarize(mean_leq = mean(centered_leq)) %>% 
-  ungroup() %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-close_noise %>% 
-  group_by(Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
-  ggplot() +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[5]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[5]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey90") +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[1]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[1]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -0.4, ymax = 0.4, xmax = "0-1000", xmin = -Inf, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 1000, xmax = 2000, fill = "grey90") +
-  geom_line(aes(x = treatment, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1) +
-  geom_point(aes(x = treatment, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5) +
-  geom_errorbar(aes(x = treatment, ymin = Leq - se, ymax = Leq + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1) +
-  xlab("Treatment") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  #scale_y_continuous(limits = c(-0.4, 0.4)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "top") 
-
-shapiro.test(close_noise$mean_leq)
-model_close_noise <- lm(mean_leq ~ Site * treatment, data = close_noise)
-car::Anova(model_close_noise)
-emmeans(model_close_noise, pairwise ~ Site,  by = "treatment")$contrasts
-emmeans(model_close_noise, pairwise ~ treatment,  by = "Site")$contrasts
-
-nd = data.frame(expand_grid(Site = levels(factor(close_noise$Site)),
-                treatment = levels(factor(close_noise$treatment))))
-
-nd$fit <- predict(model_close_noise, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$fit
-nd$SE <- predict(model_close_noise, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$se.fit
-nd <- nd %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-    annotate(geom = "rect", ymin = -10, ymax = 15, xmin = -Inf, xmax = Inf, fill = "grey90") +
-  geom_jitter(aes(x = treatment, y = mean_leq, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = close_noise) +
-  geom_line(aes(x = treatment, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
-  geom_point(aes(x = treatment, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1.5, data = nd) +
-  geom_errorbar(aes(x = treatment, ymin = fit - SE, ymax = fit + SE, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
-  xlab("Treatment (4 Days)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-10, 15), breaks = c(-10, -5, 0, 5, 10, 15), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "none") 
-```
-
-```{r far noise range, Hz, echo = FALSE, message = FALSE}
-far_noise <- main %>% 
-  filter(Distance == "far",
-         ! Site == "Isolated") %>% 
-  filter(Low_Freq < range_max & Low_Freq >= range_min) %>% 
-  mutate(day = mdy(start_date)) %>% 
-  group_by(SpiderID, Site, treatment, day) %>% 
-  summarize(mean_leq = mean(centered_leq)) %>% 
-  ungroup() %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-far_noise %>% 
-  group_by(Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
-  ggplot() +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[5]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[5]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey90") +
-  #geom_rect(xmin = as.numeric(close_1000_sum$Freq[[1]]) - 0.5,
-  #          xmax = as.numeric(close_1000_sum$Freq[[1]]) + 0.5,
-  #          ymin = -0.4, ymax = 0.4, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -0.4, ymax = 0.4, xmax = "0-1000", xmin = -Inf, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 1000, xmax = 2000, fill = "grey90") +
-  geom_line(aes(x = treatment, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1) +
-  geom_point(aes(x = treatment, y = Leq, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5) +
-  geom_errorbar(aes(x = treatment, ymin = Leq - se, ymax = Leq + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1) +
-  xlab("Treatment") +
-  ylab("Relative Amplitude \n(Centered Leq, dB)") +
-  scale_color_manual("Site", values = c("#1b9e77", "#d95f02")) +
-  #scale_y_continuous(limits = c(-0.4, 0.4)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "top") 
-
-shapiro.test(far_noise$mean_leq) # not normal
-#model_far_noise <- lm(mean_leq ~ Site * treatment, data = far_noise)
-#car::Anova(model_far_noise)
-#emmeans(model_far_noise, pairwise ~ Site,  by = "treatment")$contrasts
-#emmeans(model_far_noise, pairwise ~ treatment,  by = "Site")$contrasts
-
-#nd = data.frame(expand_grid(Site = levels(factor(close_noise$Site)),
-#                treatment = levels(factor(close_noise$treatment))))
-
-#nd$fit <- predict(model_far_noise, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$fit
-#nd$SE <- predict(model_far_noise, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$se.fit
-#nd <- nd %>% 
-#  mutate(treatment = factor(treatment),
-#         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-#ggplot() +
-#      annotate(geom = "rect", ymin = -10, ymax = 15, xmin = -Inf, xmax #= Inf, fill = "grey90") +
-#  geom_jitter(aes(x = treatment, y = mean_leq, group = Site, color = #Site), size = 1, alpha = 0.5, width = 0.1, data = far_noise) +
-#  geom_line(aes(x = treatment, y = fit, group = Site, color = Site), #position = position_dodge(width = 0.25), size = 1, data = nd) +
-#  geom_point(aes(x = treatment, y = fit, group = Site, color = Site), #position = position_dodge(width = 0.25), size = 2.5, data = nd) +
-#  geom_errorbar(aes(x = treatment, ymin = fit - SE, ymax = fit + SE, #group = Site, color = Site), width = 0.25, position = #position_dodge(width = 0.25), size = 1, data = nd) +
-#  xlab("Treatment (4 Days)") +
-#  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-#  scale_color_manual("Collection Site", values = c("#1b9e77", #"#d95f02")) +
-#  scale_y_continuous(limits = c(-10, 15), breaks = c(-10, -5, 0, 5, #10, 15), expand = c(0,0)) +
-#  theme_classic() +
-#  theme(axis.text = element_text(size = 14, color = "black", family = #"sans"),
-#        axis.title = element_text(size = 14, color = "black", family = #"sans"),
-#        legend.text = element_text(size = 14, color = "black", family #= "sans"),
-#        legend.title = element_text(size = 14, color = "black", family #= "sans"),
-#        legend.position = "none") 
-
-
-far_noise_l <- far_noise %>% 
-  filter(treatment == "Loud")
-kruskal.test(mean_leq ~ Site, data = far_noise_l)
-
-far_noise_q <- far_noise %>% 
-  filter(treatment == "Quiet")
-kruskal.test(mean_leq ~ Site, data = far_noise_q)
-
-far_noise_u <- far_noise %>% 
-  filter(Site == "Urban")
-kruskal.test(mean_leq ~ treatment, data = far_noise_u)
-
-far_noise_r <- far_noise %>% 
-  filter(Site == "Rural")
-kruskal.test(mean_leq ~ treatment, data = far_noise_r)
-
-far_noise_sum <- far_noise %>% 
-  group_by(Site, treatment) %>% 
-  summarize(mean = mean(mean_leq),
-            se = plotrix::std.error(mean_leq))
-
-ggplot() +
-      annotate(geom = "rect", ymin = -10, ymax = 15, xmin = -Inf, xmax = Inf, fill = "grey90") +
-  geom_jitter(aes(x = treatment, y = mean_leq, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = far_noise) +
-  geom_line(aes(x = treatment, y = mean, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = far_noise_sum) +
-  geom_point(aes(x = treatment, y = mean, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1.5, data = far_noise_sum) +
-  geom_errorbar(aes(x = treatment, ymin = mean - se, ymax = mean + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = far_noise_sum) +
-  xlab("Treatment (4 Days)") +
-  ylab("Relative Amplitude \n(Mean Centered Leq, dB)") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(-10, 15), breaks = c(-10, -5, 0, 5, 10, 15), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "none") 
-```
-
-*Isolated*
-
-```{r close 10hz isolated, echo = FALSE, message = FALSE}
-close_indi1 <- main %>% 
-  filter(Distance == "close") %>% 
-  group_by(SpiderID, Low_Freq, Site, treatment) %>% 
-  summarise(mean_leq = mean(centered_leq)) %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-close_indi <- close_indi1 %>% 
-  group_by(Low_Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq))%>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  annotate(geom = "rect", ymin = -10, ymax = 20, xmin = 360, xmax = 610, fill = "grey90") +
-  #annotate(geom = "rect", ymin = 0, ymax = 30, xmin = 360, xmax = 610, fill = "grey90") +
-  geom_vline(xintercept = 360, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = 610, linetype = "dashed", color = "#d95f02") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 0, xmax = 1000, fill = "grey70") +
-  #annotate(geom = "rect", ymin = -1.3, ymax = 2.1, xmin = 1000, xmax = 2000, fill = "grey90") +
-  geom_line(aes(x = Low_Freq, y = Leq, group = Site, color = Site), data = close_indi) +
-  geom_ribbon(aes(x = Low_Freq, ymin = Leq - se, ymax = Leq + se, group = Site, fill = Site), alpha = 0.5, data = close_indi) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  #ylab("Corrected Amplitude (Leq, dB)") +
-  scale_fill_manual("Collection Site", 
-                    values = c("#7570b3", "#1b9e77", "#d95f02"),
-                     labels = c("Isolated", "Rural", "Urban")) +
-  scale_color_manual("Collection Site", 
-                     values = c("#7570b3", "#1b9e77", "#d95f02"),
-                     labels = c("Isolated", "Rural", "Urban")) +
-  scale_y_continuous(limits = c(-10, 20), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  #scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30), expand = c(0,0)) +
-  scale_x_continuous(limits = c(0, 2100), breaks = c(seq(0, 2000, 500))) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "top") +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
-```
-
-```{r far 10hz isolated, echo = FALSE, message = FALSE}
-far_indi1 <- main %>% 
-  filter(Distance == "far") %>% 
-  group_by(SpiderID, Low_Freq, Site, treatment) %>% 
-  summarise(mean_leq = mean(centered_leq))  %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-far_indi <- far_indi1 %>% 
-  group_by(Low_Freq, Site, treatment) %>% 
-  summarize(Leq = mean(mean_leq),
-            se = plotrix::std.error(mean_leq)) %>% 
-  mutate(treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  annotate(geom = "rect", ymin = -10, ymax = 20, xmin = 360, xmax = 610, fill = "grey90") +
-  geom_vline(xintercept = 360, linetype = "dashed", color = "#1b9e77") +
-  geom_vline(xintercept = 610, linetype = "dashed", color = "#d95f02") +
-  geom_line(aes(x = Low_Freq, y = Leq, group = Site, color = Site), data = far_indi) +
-  geom_ribbon(aes(x = Low_Freq, ymin = Leq - se, ymax = Leq + se, group = Site, fill = Site), alpha = 0.5, data = far_indi) +
-  xlab("Frequency (10 Hz Bins)") +
-  ylab("Relative Amplitude (Centered Leq, dB)") +
-  scale_fill_manual("Collection Site", 
-                    values = c("#7570b3", "#1b9e77", "#d95f02"),
-                     labels = c("Isolated", "Rural", "Urban")) +
-  scale_color_manual("Collection Site", 
-                     values = c("#7570b3", "#1b9e77", "#d95f02"),
-                     labels = c("Isolated", "Rural", "Urban")) +
-  scale_y_continuous(limits = c(-10, 20), breaks = c(-10, 0, 10, 20), expand = c(0,0)) +
-  scale_x_continuous(limits = c(0, 2100), breaks = c(seq(0, 2000, 500))) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 16, color = "black", family = "sans"),
-        axis.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.text = element_text(size = 16, color = "black", family = "sans"),
-        legend.title = element_text(size = 16, color = "black", family = "sans"),
-        legend.position = "top") +
-  facet_wrap(~treatment, labeller = labeller(treatment = treatment.labs)) +
-  theme(strip.text = element_text(size = 16, color = "black", family="sans"))
+  valign(valign = "top", part = "all")  #%>% 
+  #save_as_image(path = here::here("tables/silk_table.png"))
 ```
 
 ## Frequency Response 
 
-**Do spiders shift their response to frequencies based on experience with different vibratory conditions?**
+```{r attack frequency response, echo = FALSE, message = FALSE}
+fr_attack <- freq_response_attack %>% 
+  #filter(Rest_Days > 7) %>% 
+  dplyr::select(SpiderID, Location, Year, Experiment, treatment, Freq_Age, Site, frequency, react) %>% 
+  mutate(treatment = ifelse(treatment == "", Experiment, treatment),
+         frequency = as.character(frequency),
+         frequency = as.numeric(frequency),
+         Site = factor(Site),
+         Year = factor(Year),
+         Location = factor(Location),
+         treatment = factor(treatment),
+         SpiderID = factor(SpiderID),
+         Site = fct_relevel(Site, "Rural", "Urban"))
+
+gam_attack <- gam(react ~  s(frequency, by = Site, bs = "sz") + s(Location, bs = "re") + s(Year, bs = "re") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = fr_attack)
+summary(gam_attack) # remove Year
+gam_attack1 <- gam(react ~  s(frequency, by = Site, bs = "sz") + s(Location, bs = "re") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = fr_attack)
+summary(gam_attack1) # remove Location
+gam_attack2 <- gam(react ~ s(frequency, by = Site, bs = "sz") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = fr_attack)
+summary(gam_attack2) # remove treatment
+gam_attack3 <- gam(react ~  Site + s(frequency, by = Site, bs = "sz") + s(Freq_Age, bs = "re"), family = "binomial", data = fr_attack)
+summary(gam_attack3) # remove Freq_Age
+gam_attack4 <- gam(react ~ s(frequency, by = Site, bs = "sz"), family = "binomial", data = fr_attack)
+sum <- summary(gam_attack4)  
+sum
+gam_attack_null <- gam(react ~ 1, family = "binomial", data = fr_attack)
+summary(gam_attack_null)
+anova(gam_attack_null, gam_attack4, test = "F") # 4 is better
+c(AIC(gam_attack), AIC(gam_attack1), AIC(gam_attack2), AIC(gam_attack3), AIC(gam_attack4), AIC(gam_attack_null))
+gam.check(gam_attack4)
+emm <- emmeans(gam_attack4, pairwise~frequency|Site, at = list(frequency = seq(100,1000, 100)))
+pairs(emm)
+
+nd <- expand.grid(frequency = seq(100,1000,100), 
+                  Site = levels(fr_attack$Site))
+predictions <- data.frame(predict(gam_attack4, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site = fct_relevel(Site, "Rural", "Urban"))
+
+fr_attack %>%
+  filter(frequency == 100) %>% 
+  group_by(Site) %>%
+  count() 
+  
+fr_attack_sum <- fr_attack %>%
+  group_by(Site, frequency) %>%
+  summarize(sum = sum(react),
+            prop = ifelse(Site == "Rural", sum/58, sum/63)) %>%
+  unique()
+
+ggplot() +
+  #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
+ # geom_line(aes(x = frequency, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
+  #geom_line(aes(x = frequency, y = fit, color = Site), data = predictions) +
+  geom_ribbon(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site), alpha = 0.5, data = predictions) +
+  geom_point(aes(x = frequency, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
+  geom_line(aes(x = frequency, y = fit, color = Site), linewidth = 0.75, data = predictions) +
+  #geom_errorbar(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
+  scale_x_continuous(limits = c(0, 1100), breaks = c(seq(0,1000,200)), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 0.5), breaks = c(seq(0,0.5,0.1)), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Proportion of spiders that attacked") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  my_theme
+```
+
+## Old Frequency Response Analysis
 
 **2022** - Deciding to pool rural but not urban (campus only)
 
@@ -1412,14 +1487,20 @@ ggarrange(all, attacks, nrow = 2)
 
 **Frequency Response**
 
-```{r all frequency response, echo = FALSE, message = FALSE}
+```{r all frequency response old, echo = FALSE, message = FALSE}
 fr_all <- freq_response_all %>% 
-  filter(! Location == "Corman") %>% 
+  #filter(! Location == "Corman") %>% 
   mutate(Group = ifelse(Year == 2022, "2022",
                         ifelse(Year == 2023 & treatment == "Loud", "2023_Loud", "2023_Quiet")),
          Group = factor(Group),
          Group = fct_relevel(Group, "2022", "2023_Quiet", "2023_Loud")) %>% 
-  dplyr::select(SpiderID, Group, Site, frequency, react)
+  dplyr::select(SpiderID, Group, Site, frequency, react) %>% 
+  unite("Group_Site", Group:Site, sep = "_", remove = FALSE) %>% 
+  mutate(Group_Site = factor(Group_Site),
+         frequency = as.character(frequency),
+         frequency = as.numeric(frequency),
+         SpiderID = factor(SpiderID),
+         Site = factor(Site))
 
 # sample sizes
 fr_all %>% 
@@ -1490,14 +1571,21 @@ fr_all_props %>%
   facet_wrap(~Site) 
 ```
 
-```{r attacks frequency response, echo = FALSE, message = FALSE}
+```{r attacks frequency response old, echo = FALSE, message = FALSE}
 fr_attack <- freq_response_attack %>% 
-  filter(! Location == "Corman") %>% 
+  #filter(! Location == "Corman") %>% 
   mutate(Group = ifelse(Year == 2022, "2022",
                         ifelse(Year == 2023 & treatment == "Loud", "2023_Loud", "2023_Quiet")),
          Group = factor(Group),
          Group = fct_relevel(Group, "2022", "2023_Quiet", "2023_Loud")) %>% 
-  dplyr::select(SpiderID, Group, Site, frequency, react)
+  dplyr::select(SpiderID, Group, Site, frequency, react) %>% 
+  unite("Group_Site", Group:Site, sep = "_", remove = FALSE) %>% 
+  mutate(Group_Site = factor(Group_Site),
+         frequency = as.character(frequency),
+         frequency = as.numeric(frequency),
+         SpiderID = factor(SpiderID),
+         Site = factor(Site))
+
 
 # sample sizes
 fr_attack %>% 
@@ -1569,7 +1657,7 @@ fr_attack_prop %>%
   facet_wrap(~Site) 
 ```
 
-```{r attacks across age, echo = FALSE, message = FALSE}
+```{r attacks across age old, echo = FALSE, message = FALSE}
 age <- freq_response_attack %>% 
   filter(Year == 2023) %>% 
   unite("site_treatment", c(Site, treatment), sep = "_", remove = FALSE) %>% 
@@ -1591,157 +1679,521 @@ age %>%
   facet_grid(frequency ~ Site + treatment)
 ```
 
-**Isolated Frequency Responses**
+## Toothbrush Response
 
-```{r isolated all, echo = FALSE, message = FALSE}
-# sample sizes
-isolated_all %>% 
-  group_by(before_after, treatment) %>% 
-  count() # divide by 10
+```{r time to attack over time, echo = FALSE, message = FALSE}
+size = 16
+# day one
+one_fit <- coxph(Surv(total_time, Attacked) ~ Site_Treatment + cluster(SpiderID), data = day_one)
+summary(one_fit)
 
-is_all <- isolated_all%>% 
-  group_by(before_after, treatment, frequency) %>% 
-  summarize(reactions = sum(react), 
-            prop = ifelse(before_after == "After" & treatment == "Loud", reactions/6,
-                   ifelse(before_after == "After" & treatment == "Quiet", reactions/4,
-                   ifelse(before_after == "Before" & treatment == "Loud", reactions/10, reactions/10)))) %>% 
-  ungroup() %>% 
-  unique() %>% 
-  mutate(frequency = as.character(frequency),
-         frequency = as.numeric(frequency),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"),
-         before_after = fct_relevel(before_after, "Before", "After"))
+one_fit <- survfit(Surv(total_time, Attacked)~ Site_Treatment, data = day_one)
+pairwise_survdiff(Surv(total_time, Attacked)~ Site_Treatment, data = day_one)
+p.value <- surv_pvalue(one_fit, day_one)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs <- list()
+attack_graphs[[1]] <- ggsurvplot(one_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(15, 0.1), 
+           conf.int = TRUE,
+           title = "After One Day", 
+           pval.size = 6,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 30),
+           break.x.by = 5, 
+           legend = "none",
+           legend.title = "Site_Treatment", 
+           legend.labs = c("Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("dashed", "solid", "dashed", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = four_colors)
 
-is_all %>% 
-  ggplot() +
-  geom_tile(aes(x = before_after, y = frequency, fill = treatment, alpha = prop), linewidth = 2, width = 0.9) +
-  scale_fill_manual(name = "Treatment", values = c("#1b9e77", "#d95f02")) +
-  scale_alpha_continuous(name = "Prop. Reacted", range = c(0, 1), limits = c(0, 0.6), breaks = c(0, 0.1, 0.2, 0.3, 0.33, 0.4, 0.5)) +
-  xlab("") +
-  ylab("Pure Tone Frequency (100 Hz Increments)") +
-  scale_y_continuous(breaks = c(0, 200, 400, 600, 800, 1000)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family="sans"),
-        axis.title = element_text(size = 14, color = "black", family="sans"),
-        legend.text = element_text(size = 14, color = "black", family="sans"),
-        legend.title = element_text(size = 14, color = "black", family="sans"),
-        legend.position = "top",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        strip.text = element_text(size = 14, color = "black", family="sans")) +
-  facet_wrap(~treatment) 
+# three weeks
+three_fit <- coxph(Surv(attack_time, attack) ~ Site_Treatment + trial + cluster(spider), data = three_weeks)
+summary(three_fit)
 
-# above 33%
-#Quiet
-# Before 400, 1000, 200, 700
-# After 300, 600
+three_fit <- survfit(Surv(attack_time, attack)~ Site_Treatment, data = three_weeks)
+pairwise_survdiff(Surv(attack_time, attack)~ Site_Treatment, data = three_weeks)
+p.value <- surv_pvalue(three_fit, three_weeks)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs[[2]] <- ggsurvplot(three_fit,
+           pval = paste("p = ", p.value$pval), 
+           pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "2-3 Weeks", 
+           pval.size = 6,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "none",
+           legend.title = "Site_Treatment", 
+           legend.labs = c("Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("dashed", "solid", "dashed", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = four_colors)
 
-#Loud
-# Before 600, 200, 900
-# After 900, 400, 500, 600, 700
+# six weeks
+six_fit <- coxph(Surv(attack_time, attack) ~ Site_Treatment + trial + cluster(spider), data = six_weeks)
+summary(six_fit)
+
+six_fit <- survfit(Surv(attack_time, attack)~ Site_Treatment, data = six_weeks)
+pairwise_survdiff(Surv(attack_time, attack)~ Site_Treatment, data = six_weeks)
+p.value <- surv_pvalue(six_fit, six_weeks)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs[[3]] <- ggsurvplot(six_fit,
+           pval = paste("p = ", p.value$pval), 
+           pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "5-6 Weeks", 
+           pval.size = 6,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "none",
+           legend.title = "Site_Treatment", 
+           legend.labs = c("Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("dashed", "solid", "dashed", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = four_colors)
+
+arrange_ggsurvplots(attack_graphs, print = TRUE, ncol = 3, nrow = 1)
 ```
 
-```{r isolated attack, echo = FALSE, message = FALSE}
-# sample sizes
-isolated_attack %>% 
-  group_by(before_after, treatment) %>% 
-  count() # divide by 10
+```{r time to attack over time lq, echo = FALSE, message = FALSE}
+size = 14
+# day one
+one_fit <- coxph(Surv(total_time, Attacked) ~ Treatment + cluster(SpiderID), data = day_one)
+summary(one_fit)
 
-is_attacks <- isolated_attack %>% 
-  group_by(before_after, treatment, frequency) %>% 
-  summarize(reactions = sum(react), 
-            prop = ifelse(before_after == "After" & treatment == "Loud", reactions/5,
-                   ifelse(before_after == "After" & treatment == "Quiet", reactions/3,
-                   ifelse(before_after == "Before" & treatment == "Loud", reactions/8, reactions/9)))) %>% 
-  ungroup() %>% 
-  unique() %>% 
-  mutate(frequency = as.character(frequency),
-         frequency = as.numeric(frequency),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"),
-         before_after = fct_relevel(before_after, "Before", "After"))
+one_fit <- survfit(Surv(total_time, Attacked)~ Treatment, data = day_one)
+pairwise_survdiff(Surv(total_time, Attacked)~ Treatment, data = day_one)
+p.value <- surv_pvalue(one_fit, day_one)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs <- list()
+attack_graphs[[1]] <- ggsurvplot(one_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(15, 0.1), 
+           conf.int = TRUE,
+           title = "After One Day", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 30),
+           break.x.by = 5, 
+           legend = "none",
+           legend.title = "Treatment", 
+           legend.labs = c("Quiet", "Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = two_colors)
 
-is_attacks %>% 
-  ggplot() +
-  geom_tile(aes(x = before_after, y = frequency, fill = treatment, alpha = prop), linewidth = 2, width = 0.9) +
-  scale_fill_manual(name = "Treatment", values = c("#1b9e77", "#d95f02")) +
-  scale_alpha_continuous(name = "Prop. Attacked", range = c(0, 1), limits = c(0, 0.6), breaks = c(0, 0.1, 0.2, 0.3, 0.33, 0.4, 0.5)) +
-  xlab("") +
-  ylab("Pure Tone Frequency (100 Hz Increments)") +
-  scale_y_continuous(breaks = c(0, 200, 400, 600, 800, 1000)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family="sans"),
-        axis.title = element_text(size = 14, color = "black", family="sans"),
-        legend.text = element_text(size = 14, color = "black", family="sans"),
-        legend.title = element_text(size = 14, color = "black", family="sans"),
-        legend.position = "top",
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
-        strip.text = element_text(size = 14, color = "black", family="sans")) +
-  facet_wrap(~treatment) 
+# three weeks
+three_fit <- coxph(Surv(attack_time, attack) ~ treatment1 + trial + cluster(spider), data = three_weeks)
+summary(three_fit)
 
-# above 33%
-#Quiet
-# Before 200, 400, 700
-# After 300, 500, 600
+three_fit <- survfit(Surv(attack_time, attack)~ treatment1, data = three_weeks)
+pairwise_survdiff(Surv(attack_time, attack)~ treatment1, data = three_weeks)
+p.value <- surv_pvalue(three_fit, three_weeks)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs[[2]] <- ggsurvplot(three_fit,
+           pval = paste("p = ", p.value$pval), 
+           pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "2-3 Weeks", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "none",
+           legend.title = "Treatment", 
+           legend.labs = c("Quiet", "Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = two_colors)
 
-#Loud
-# Before 900, 500
-# After 400, 500, 600, 900
+# six weeks
+six_fit <- coxph(Surv(attack_time, attack) ~ treatment1 + trial + cluster(spider), data = six_weeks)
+summary(six_fit)
+
+six_fit <- survfit(Surv(attack_time, attack)~ treatment1, data = six_weeks)
+pairwise_survdiff(Surv(attack_time, attack)~ treatment1, data = six_weeks)
+p.value <- surv_pvalue(six_fit, six_weeks)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs[[3]] <- ggsurvplot(six_fit,
+           pval = paste("p = ", p.value$pval), 
+           pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "5-6 Weeks - Same", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "none",
+           legend.title = "Treatment", 
+           legend.labs = c("Quiet", "Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = two_colors)
+
+six_fit2 <- coxph(Surv(attack_time, attack) ~ treatment2 + trial + cluster(spider), data = six_weeks_switch)
+summary(six_fit2)
+
+six_fit2 <- survfit(Surv(attack_time, attack)~ treatment2, data = six_weeks_switch)
+pairwise_survdiff(Surv(attack_time, attack)~ treatment2, data = six_weeks_switch)
+p.value <- surv_pvalue(six_fit2, six_weeks_switch)
+p.value$pval <- format(p.value$pval, digits = 3)
+attack_graphs[[4]] <- ggsurvplot(six_fit2,
+           pval = paste("p = ", p.value$pval), 
+           pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "5-6 Weeks - Switch", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "none",
+           legend.title = "Treatment", 
+           legend.labs = c("Quiet", "Loud"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = two_colors)
+
+arrange_ggsurvplots(attack_graphs, print = TRUE, ncol = 4, nrow = 1)
 ```
 
-**Silk Mass**
+```{r time to attack switch, echo = FALSE, message = FALSE}
+size = 12
+ba_loud_quiet <- before_after %>% 
+  filter(Site_Treatment == "Urban_Loud_Quiet"|Site_Treatment == "Rural_Loud_Quiet") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+lq_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_loud_quiet)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_loud_quiet)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_loud_quiet))
+p.value <- surv_pvalue(lq_fit, ba_loud_quiet)
+p.value$pval <- format(p.value$pval, digits = 3)
+switch_graphs <- list()
+switch_graphs[[1]] <- ggsurvplot(lq_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "Loud-to-Quiet", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked\nSlower <---------------> Faster",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "top",
+           legend.title = "", 
+           legend.labs = c("Before", "After"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = c("black", "grey60"))
 
-```{r silk_mass, echo = FALSE, message = FALSE}
-silk <- main %>% 
-  ungroup() %>% 
-  filter(! Site == "Isolated") %>% 
-  dplyr::select(SpiderID, Site, treatment, trial_age, mass_mg, dry_mg, moisture_per) %>% 
-  unique() %>% 
-  mutate(dry_microg = dry_mg * 1000,
-         dry_microg_body_mg = dry_microg / mass_mg,
-         moisture_per = as.numeric(moisture_per) / 100,
-         treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud")) %>% 
-  filter(! dry_mg == 0) 
+ba_urban_loud_quiet <- before_after %>% 
+  filter(Site_Treatment == "Urban_Loud_Quiet") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+ulq_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_urban_loud_quiet)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_urban_loud_quiet)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_urban_loud_quiet))
 
-# raw data
-silk_sum <- silk %>% 
-  group_by(Site, treatment) %>% 
-  summarize(mean_silk = mean(dry_microg_body_mg), 
-            se_silk = plotrix::std.error(dry_microg_body_mg))
+ba_rural_loud_quiet <- before_after %>% 
+  filter(Site_Treatment == "Rural_Loud_Quiet") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+rlq_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_rural_loud_quiet)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_rural_loud_quiet)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_rural_loud_quiet))
 
-silk_sum %>% 
-  ggplot() +
-  geom_point(aes(x = treatment, y = mean_silk, group = Site, color = Site)) +
-  geom_errorbar(aes(x = treatment, ymin = mean_silk - se_silk, ymax = mean_silk + se_silk, group = Site, color = Site), width = 0.25) +
+ba_quiet_loud <- before_after %>% 
+  filter(Site_Treatment == "Urban_Quiet_Loud"|Site_Treatment == "Rural_Quiet_Loud") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after")) 
+ql_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_quiet_loud)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_quiet_loud)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_quiet_loud))
+p.value <- surv_pvalue(ql_fit, ba_quiet_loud)
+p.value$pval <- format(p.value$pval, digits = 3)
+switch_graphs[[2]] <- ggsurvplot(ql_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "Quiet-to-Loud", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "top",
+           legend.title = "", 
+           legend.labs = c("Before", "After"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = c("black", "grey60"))
+
+ba_urban_quiet_loud <- before_after %>% 
+  filter(Site_Treatment == "Urban_Quiet_Loud") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+uql_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_urban_quiet_loud)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_urban_quiet_loud)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_urban_quiet_loud))
+
+ba_rural_quiet_loud <- before_after %>% 
+  filter(Site_Treatment == "Rural_Quiet_Loud") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+rql_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_rural_quiet_loud)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_rural_quiet_loud)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_rural_quiet_loud))
+
+ba_loud_loud <- before_after %>% 
+  filter(Site_Treatment == "Urban_Loud_Loud"|Site_Treatment == "Rural_Loud_Loud") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+ll_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_loud_loud)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_loud_loud)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_loud_loud))
+p.value <- surv_pvalue(ll_fit, ba_loud_loud)
+p.value$pval <- format(p.value$pval, digits = 3)
+switch_graphs[[3]] <- ggsurvplot(ll_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "Loud-to-Loud", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "Proportion of spiders that attacked\nSlower <---------------> Faster",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "top",
+           legend.title = "", 
+           legend.labs = c("Before", "After"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = c("black", "grey60"))
+
+ba_quiet_quiet <- before_after %>% 
+  filter(Site_Treatment == "Urban_Quiet_Quiet"|Site_Treatment == "Rural_Quiet_Quiet") %>% 
+  mutate(ba = fct_relevel(ba, "before", "after"))
+qq_fit <- survfit(Surv(attack_time, attack) ~ ba, data = ba_quiet_quiet)
+pairwise_survdiff(Surv(attack_time, attack) ~ ba, data = ba_quiet_quiet)
+summary(coxph(Surv(attack_time, attack) ~ ba + cluster(spider), data = ba_quiet_quiet))
+p.value <- surv_pvalue(qq_fit, ba_quiet_quiet)
+p.value$pval <- format(p.value$pval, digits = 3)
+switch_graphs[[4]] <- ggsurvplot(qq_fit,
+           pval = paste("p = ", p.value$pval), 
+             pval.coord = c(3, 0.1), 
+           conf.int = TRUE,
+           title = "Quiet-to-Quiet", 
+           pval.size = 4,
+           font.x = c(size, "plain", "black"),
+           font.y = c(size, "plain", "black"),
+           font.tickslab = c(size),
+           font.legend = c(size, "plain", "black"),
+           font.title = c(size, "bold", "black"),
+           fun = "event",
+           ylab = "",
+           xlab = "Time (seconds)",
+           xlim = c(0, 6),
+           break.x.by = 1, 
+           legend = "top",
+           legend.title = "", 
+           legend.labs = c("Before", "After"),
+           risk.table = FALSE, # Add risk table
+           #risk.table.col = "strata", # Change risk table color by groups
+           linetype = c("solid", "solid"), # Change line type by groups
+           #surv.median.line = "hv", # Specify median survival
+           ggtheme = theme(axis.line = element_line(color = "black"),
+                           panel.grid.major = element_blank(),
+                           panel.grid.minor = element_blank(),
+                           panel.border = element_blank(),
+                           panel.background = element_blank()),
+           palette = c("black", "grey60"))
+
+arrange_ggsurvplots(switch_graphs, print = TRUE, ncol = 4, nrow = 1)
+```
+
+```{r attacked, echo = FALSE, message = FALSE}
+shapiro.test(tb$Attacked)
+att_model <- glmer(Attacked ~ Site * Treatment + (1|SpiderID), data = tb, family = "binomial")
+car::Anova(att_model)
+att_model2 <- glmer(Attacked ~ (1|SpiderID), data = tb, family = "binomial")
+anova(att_model, att_model2)
+c(AIC(att_model), AIC(att_model2))
+DHARMa::testDispersion(att_model)
+
+emmeans(att_model, pairwise ~ Treatment,  by = "Site")$contrasts
+emmeans(att_model, pairwise ~ Site,  by = "Treatment")$contrasts
+
+predictions <- expand.grid(Site = levels(factor(tb$Site)), 
+                           Treatment = levels(factor(tb$Treatment)))
+predictions$response <- predict(att_model, newdata = predictions, se.fit = TRUE, re.form = NA, type = "response")
+
+#bigBoot_attacked <- bootMer(att_model, bootStrap, nsim = 1000)
+#saveRDS(bigBoot_attacked, file = "boots/bigBoot_attacked.Rds")
+bigBoot_attacked <- readRDS("boots/bigBoot_attacked.Rds") 
+predSE <- t(apply(bigBoot_attacked$t, MARGIN = 2, FUN = sd, na.rm = TRUE))
+predictions$SE <- predSE[1, ]
+predictions <- predictions %>% 
+  mutate(Treatment = fct_recode(Treatment, "Loud (1 day)" = "Loud", "Quiet (1 day)" = "Quiet"),
+         Treatment = fct_relevel(Treatment, "Quiet (1 day)", "Loud (1 day)"),
+         Site = factor(Site),
+         Site = fct_relevel(Site, "Rural", "Urban"))
+
+ggplot() +
+  geom_point(aes(x = Treatment, y = response, color = Site), size = 2, data = predictions) +
+  geom_errorbar(aes(x = Treatment, ymin = response - SE, ymax = response + SE, color = Site), width = 0.1, linewidth = 0.75, data = predictions) +
+  geom_line(aes(x = Treatment, y = response, group = Site, color = Site), linewidth = 0.75, data = predictions) +
   xlab("Treatment") +
-  ylab("Dry Silk Mass (µg) Corrected by Body Mass (mg)") +
-  scale_fill_manual(values = c("#1b9e77", "#d95f02"),
+  ylab("Proportion of spiders that attacked") +
+  scale_y_continuous(limits = c(0, 1.2), breaks = c(seq(0,1,0.2))) +
+  scale_fill_manual("", 
+                     values = c("#1b9e77", "#d95f02"),
                      labels = c("Rural", "Urban")) +
-  scale_color_manual(values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
+  scale_color_manual("", 
+                     values = c("#1b9e77", "#d95f02"),
+                    labels = c("Rural", "Urban")) +
   theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black"),
-        axis.title = element_text(size = 14, color = "black"),
-        legend.text = element_text(size = 14, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.position = "top")
+  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
+        axis.title = element_text(size = 14, color = "black", family = "sans"),
+        legend.text = element_text(size = 14, color = "black", family = "sans"),
+        legend.title = element_text(size = 14, color = "black", family = "sans"),
+        legend.position = "top") +
+  theme(strip.text = element_text(size = 14, color = "black", family="sans"))
 
-shapiro.test(log(silk$dry_microg_body_mg))
-silk_model <- lm(log(dry_microg_body_mg) ~ Site * treatment, data = silk)
-car::Anova(silk_model)
-emmeans(silk_model, pairwise ~ treatment,  by = "Site")$contrasts
-emmeans(silk_model, pairwise ~ Site,  by = "treatment")$contrasts
-
-# not normal
-silk_loud <- silk %>% 
-  filter(treatment == "Loud")
-kruskal.test(dry_microg_body_mg ~ Site, data = silk_loud)
-silk_quiet <- silk %>% 
-  filter(treatment == "Quiet")
-kruskal.test(dry_microg_body_mg ~ Site, data = silk_quiet)
-
-# assumptions
-test_silk <- augment(silk_model, data = silk)
-resid_silk <- ggplot(test_silk, aes(x = .fitted, y = .resid)) + 
+test_att <- augment(att_model, data = tb)
+resid_att <- ggplot(test_att, aes(x = .fitted, y = .resid)) + 
   geom_point() + 
   geom_smooth() +
   geom_hline(yintercept = 0) +
@@ -1752,12 +2204,12 @@ resid_silk <- ggplot(test_silk, aes(x = .fitted, y = .resid)) +
   theme(axis.text.x=element_text(color="black", size=14)) + 
   theme(axis.text.y=element_text(color="black", size=14))
 
-y <- quantile(test_silk$.resid, c(0.25, 0.75))
+y <- quantile(test_att$.resid, c(0.25, 0.75))
 x <- qnorm(c(0.25, 0.75))
 slope <- diff(y)/diff(x)
 int <- y[1L] - slope * x[1L]
 
-qq_silk <- ggplot(test_silk, aes(sample = .resid)) + 
+qq_att <- ggplot(test_att, aes(sample = .resid)) + 
   stat_qq() + 
   geom_abline(slope = slope, intercept = int) +
   xlab("Theoretical Quantiles") +
@@ -1766,167 +2218,100 @@ qq_silk <- ggplot(test_silk, aes(sample = .resid)) +
   theme(text = element_text(size = 14, color = "black")) +
   theme(axis.text.x=element_text(color="black", size=14)) + 
   theme(axis.text.y=element_text(color="black", size=14)) 
-
-# predictions
-nd = data.frame(expand_grid(Site = levels(factor(silk$Site)),
-                treatment = levels(factor(silk$treatment))))
-
-nd$fit <- predict(silk_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$fit
-nd$SE <- predict(silk_model, newdata = nd, se.fit = TRUE, re.form = NA, type = "response")$se.fit
-nd <- nd %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
-
-ggplot() +
-  geom_jitter(aes(x = treatment, y = dry_microg_body_mg, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = silk) +
-  geom_line(aes(x = treatment, y = exp(fit), group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
-  geom_point(aes(x = treatment, y = exp(fit), group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
-  geom_errorbar(aes(x = treatment, ymin = exp(fit - SE), ymax = exp(fit + SE), group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
-  xlab("Treatment (4 Days)") +
-  ylab("Dry Silk Mass (µg) \nCorrected by Body Mass (mg)") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(0, 26), breaks = c(0, 5, 10, 15, 20, 25), expand = c(0,0)) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
-        axis.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.text = element_text(size = 14, color = "black", family = "sans"),
-        legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top") 
+ggarrange(resid_att, qq_att)
 ```
 
-```{r silk_moisture, echo = FALSE, message = FALSE}
-# raw data
-moist_sum <- silk %>% 
-  group_by(Site, treatment) %>% 
-  summarize(mean_moist = mean(moisture_per), 
-            se_moist = plotrix::std.error(moisture_per)) %>% 
-  mutate(treatment = factor(treatment),
-         treatment = fct_relevel(treatment, "Quiet", "Loud"))
+```{r pauses}
+attacked <- tb %>% 
+  filter(Attacked == 1) %>% 
+  mutate(pauses_per_cm = Num_Pauses / (Distance_cm))
 
-moist_sum %>% 
+attacked %>% 
+  group_by(Site, Treatment) %>% 
+  summarize(mean = mean(pauses_per_cm),
+            se = plotrix::std.error(pauses_per_cm)) %>% 
   ggplot() +
-  geom_point(aes(x = treatment, y = mean_moist, group = Site, color = Site)) +
-  geom_errorbar(aes(x = treatment, ymin = mean_moist - se_moist, ymax = mean_moist + se_moist, group = Site, color = Site), width = 0.25) +
-  xlab("Treatment") +
-  ylab("Percent Silk Moisture") +
-  scale_fill_manual(values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  scale_color_manual(values = c("#1b9e77", "#d95f02"),
-                     labels = c("Rural", "Urban")) +
-  theme_classic() +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 12, color = "black"),
-        legend.position = "top")
+  geom_point(aes(x = Site, y = mean, color = Treatment)) +
+  geom_errorbar(aes(x = Site, ymin = mean - se, ymax = mean + se, color = Treatment), width = 0.25)
 
-shapiro.test(log(silk$moisture_per))
-moist_model <- lm(log(moisture_per) ~ Site * treatment, data = silk)
-car::Anova(moist_model)
+shapiro.test(log(attacked$pauses_per_cm))
+pauses <- lmer(log(pauses_per_cm) ~ Site * Treatment + (1|SpiderID), data = attacked)
+pauses2 <- lmer(log(pauses_per_cm) ~ (1|SpiderID), data = attacked)
+car::Anova(pauses)
+anova(pauses, pauses2)
+DHARMa::testDispersion(pauses)
 
-# not normal
-silk_urban <- silk %>% 
+attacked_urban <- attacked %>% 
   filter(Site == "Urban")
-kruskal.test(moisture_per ~ treatment, data = silk_urban)
-silk_rural <- silk %>% 
+kruskal.test(pauses_per_cm ~ Treatment, data = attacked_urban)
+attacked_rural <- attacked %>% 
   filter(Site == "Rural")
-kruskal.test(moisture_per ~ treatment, data = silk_rural)
+kruskal.test(pauses_per_cm ~ Treatment, data = attacked_rural)
 
-moist_model <- betareg(moisture_per ~ Site * treatment, data = silk)
-car::Anova(moist_model)
-emmeans(moist_model, pairwise ~ treatment,  by = "Site")$contrasts
-emmeans(moist_model, pairwise ~ Site,  by = "treatment")$contrasts
+predictions <- expand.grid(Site = levels(factor(tb$Site)), 
+                           Treatment = levels(factor(tb$Treatment)))
+predictions$response <- predict(pauses, newdata = predictions, se.fit = TRUE, re.form = NA, type = "response")
 
-# predictions
-nd <- as.data.frame(allEffects(moist_model))$"Site:treatment"
+#bigBoot_pauses <- bootMer(pauses, bootStrap, nsim = 1000)
+#saveRDS(bigBoot_pauses, file = "boots/bigBoot_pauses.Rds")
+bigBoot_pauses <- readRDS("boots/bigBoot_pauses.Rds") 
+predSE <- t(apply(bigBoot_pauses$t, MARGIN = 2, FUN = sd, na.rm = TRUE))
+predictions$SE <- predSE[1, ]
+predictions <- predictions %>% 
+  mutate(Treatment = fct_recode(Treatment, "Loud (1 day)" = "Loud", "Quiet (1 day)" = "Quiet"),
+         Treatment = fct_relevel(Treatment, "Quiet (1 day)", "Loud (1 day)"))
+
+attacked2 <- attacked %>% 
+  mutate(Treatment = fct_recode(Treatment, "Loud (1 day)" = "Loud", "Quiet (1 day)" = "Quiet"),
+         Treatment = fct_relevel(Treatment, "Quiet (1 day)", "Loud (1 day)"))
 
 ggplot() +
-  geom_jitter(aes(x = treatment, y = moisture_per, group = Site, color = Site), size = 1, alpha = 0.5, width = 0.1, data = silk) +
-  geom_line(aes(x = treatment, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 1, data = nd) +
-  geom_point(aes(x = treatment, y = fit, group = Site, color = Site), position = position_dodge(width = 0.25), size = 2.5, data = nd) +
-  geom_errorbar(aes(x = treatment, ymin = fit - se, ymax = fit + se, group = Site, color = Site), width = 0.25, position = position_dodge(width = 0.25), size = 1, data = nd) +
-  xlab("Treatment (4 Days)") +
-  ylab("Proportion of Silk Moisture") +
-  scale_color_manual("Collection Site", values = c("#1b9e77", "#d95f02")) +
-  scale_y_continuous(limits = c(0, 0.6), breaks = c(0, 0.2, 0.4, 0.6), expand = c(0,0)) +
+  geom_jitter(aes(x = Treatment, y = pauses_per_cm, color = Site), width = 0.1, alpha = 0.25, data = attacked2) +
+  geom_point(aes(x = Treatment, y = exp(response), color = Site), size = 3, data = predictions) +
+  geom_errorbar(aes(x = Treatment, ymin = exp(response - 1.96 * SE), ymax = exp(response + 1.96 * SE), color = Site), linewidth = 0.75, width = 0.1, data = predictions) +
+  geom_line(aes(x = Treatment, y = exp(response), group = Site, color = Site), linewidth = 0.75, data = predictions) +
+  xlab("Treatment") +
+  ylab("Number of pauses per cm distance") +
+  scale_y_continuous(limits = c(0, 5), breaks = c(seq(0,5,1))) +
+  scale_fill_manual("", 
+                     values = c("#1b9e77", "#d95f02"),
+                     labels = c("Rural", "Urban")) +
+  scale_color_manual("", 
+                     values = c("#1b9e77", "#d95f02"),
+                    labels = c("Rural", "Urban")) +
   theme_classic() +
   theme(axis.text = element_text(size = 14, color = "black", family = "sans"),
         axis.title = element_text(size = 14, color = "black", family = "sans"),
         legend.text = element_text(size = 14, color = "black", family = "sans"),
         legend.title = element_text(size = 14, color = "black", family = "sans"),
-        legend.position = "top") 
+        legend.position = "top") +
+  theme(strip.text = element_text(size = 14, color = "black", family="sans"))
 
-```
+test_pause <- augment(pauses_urban, data = attacked_urban)
+resid_pause <- ggplot(test_pause, aes(x = .fitted, y = .resid)) + 
+  geom_point() + 
+  geom_smooth() +
+  geom_hline(yintercept = 0) +
+  xlab("Fitted Values") +
+  ylab("Standardized \nResiduals") +
+  theme_classic() +
+  theme(text = element_text(size = 14, color = "black")) +
+  theme(axis.text.x=element_text(color="black", size=14)) + 
+  theme(axis.text.y=element_text(color="black", size=14))
 
-```{r silk stats, echo = FALSE, message = FALSE}
-silk_stats <- read.csv(file = "tables/silk_table.csv", header = TRUE) %>% 
-  mutate(dependent = factor(dependent),
-         dependent = fct_recode(dependent, "Dry Silk Mass (µg) per Body Mass (mg)" = "silk_mass", 
-                            "Prop. Silk Moisture" = "silk_moist"),
-         test = factor(test), 
-         test = fct_recode(test, "ANOVA" = "lm",
-                                   "Beta Regression " = "beta"),
-         independent = factor(independent),
-         independent = fct_recode(independent, "Collection Site" = "Site",
-                               "Treatment" = "Treatment",
-                               "Collection Site x Treatment" = "Site_Treatment"),
-         df = factor(df),
-         df = fct_recode(df, " 56" = "56", "56" = "_56"),
-         p_value = factor(p_value),
-         p_value = fct_recode(p_value, "   0.159" = "0.1593",
-                        "   0.817" = "0.8169",
-                        "   0.226" = "0.2262",
-                        "   0.435" = "0.43468",
-                        "   0.078 ." = "0.07844",
-                        "   0.144" = "0.14418")) 
+y <- quantile(test_pause$.resid, c(0.25, 0.75))
+x <- qnorm(c(0.25, 0.75))
+slope <- diff(y)/diff(x)
+int <- y[1L] - slope * x[1L]
 
-colnames(silk_stats) <- c('Dependent Variable','Test', 'Residual DF', 'Independent Variable', 'Test Statistic', 'P-Value')
-
-flextable(silk_stats[, 1:6]) %>% 
-  autofit() %>% 
-  merge_v(j = c('Dependent Variable', 'Test', 'Residual DF'), part = "body") %>% 
-  theme_vanilla() %>% 
-  hline(i = c("1", "2", "4", "5"), 
-        j = c("Independent Variable", "Test Statistic", "P-Value"), 
-        part = "body", 
-        border = officer::fp_border(width = 0, color = "black")) %>% 
-  bold(bold = TRUE, part = "header") %>% 
-  fontsize(size = 10, part = "all") %>% 
-  align(align = "left", part = "all") %>%
-  valign(valign = "top", part = "all") %>% 
-    footnote(i = c(1), j = 2, part = "body", ref_symbols = "a", value = as_paragraph("Test statistic: F-value")) %>%
-  footnote(i = c(4), j = 2, ref_symbols = "b", value = as_paragraph("Test statistic: Chi-squared value")) #%>% 
-  #save_as_image(path = here::here("silk_table.png"))
-
-silk_stats2 <- read.csv(file = "tables/multicomp_silk.csv", header = TRUE) %>% 
-  mutate(Dependent = factor(Dependent),
-         Dependent = fct_recode(Dependent, "Dry Silk Mass (µg) per Body Mass (mg)" = "silk_mass", 
-                            "Prop. Silk Moisture" = "silk_moist"),
-         Comparison = factor(Comparison),
-         Comparison = fct_recode(Comparison, "Collection Site" = "Site"),
-         df = factor(df),
-         df = fct_recode(df, " 56" = "56", "56" = "_56"),
-         p_value = factor(p_value),
-         p_value = fct_recode(p_value, "   0.887" = "0.8865",
-                        "   0.066 ." = "0.0662",
-                        "   0.022 *" = "0.022",
-                        "   0.798" = "0.7978"))
-
-colnames(silk_stats2) <- c('Dependent Variable','Residual DF', 'Comparison', 'Level', 'Test Statistic', 'P-Value')
-
-flextable(silk_stats2[, 1:6]) %>% 
-  autofit() %>% 
-  merge_v(j = c('Dependent Variable', 'Residual DF', 'Comparison'), part = "body") %>% 
-  theme_vanilla() %>% 
-  hline(i = c("1", "3"), 
-        j = c("Level", "Test Statistic", "P-Value"), 
-        part = "body", 
-        border = officer::fp_border(width = 0, color = "black")) %>% 
-  bold(bold = TRUE, part = "header") %>% 
-  fontsize(size = 10, part = "all") %>% 
-  align(align = "left", part = "all") %>%
-  valign(valign = "top", part = "all") %>% 
-    footnote(i = c(1, 2), j = 5, part = "body", ref_symbols = "a", value = as_paragraph("Test statistic: t-ratio")) %>%
-  footnote(i = c(3, 4), j = 5, ref_symbols = "b", value = as_paragraph("Test statistic: z-ratio")) #%>% 
-  #save_as_image(path = here::here("silk_table_multicomp.png"))
+qq_pause <- ggplot(test_pause, aes(sample = .resid)) + 
+  stat_qq() + 
+  geom_abline(slope = slope, intercept = int) +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  theme_classic() +
+  theme(text = element_text(size = 14, color = "black")) +
+  theme(axis.text.x=element_text(color="black", size=14)) + 
+  theme(axis.text.y=element_text(color="black", size=14)) 
+ggarrange(resid_pause, qq_pause)
 ```
