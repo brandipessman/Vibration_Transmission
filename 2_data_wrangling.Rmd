@@ -1,0 +1,479 @@
+---
+title: "Data Wrangling"
+author: "Brandi Pessman"
+date: "2024-10-15"
+output: html_document
+---
+
+# Load Libraries
+
+```{r libraries}
+library(tidyverse) # for wrangling data
+```
+
+# Spider's Responses to Pure Tone Frequencies
+
+```{r import freq response}
+freq_response_attack <- read.csv("data/frequency_response_attack.csv") %>% 
+  dplyr::select(SpiderID:hz1000) %>% 
+  pivot_longer(cols = c(hz100:hz1000), values_to = "react", names_to = "frequency") %>% 
+  mutate(frequency = fct_recode(frequency, "100" = "hz100",
+                                "200" = "hz200",
+                                "300" = "hz300",
+                                "400" = "hz400",
+                                "500" = "hz500",
+                                "600" = "hz600",
+                                "700" = "hz700",
+                                "800" = "hz800",
+                                "900" = "hz900",
+                                "1000" = "hz1000")) %>% 
+    #filter(Rest_Days > 7) %>% 
+  mutate(treatment = ifelse(treatment == "", Experiment, treatment),
+         frequency = as.character(frequency),
+         frequency = as.numeric(frequency),
+         Site = factor(Site),
+         Year = factor(Year),
+         Location = factor(Location),
+         treatment = factor(treatment),
+         SpiderID = factor(SpiderID),
+         Site = fct_relevel(Site, "Rural", "Urban"))
+```
+
+```{r import freq response order}
+freq_response_order <- read.csv("data/frequency_response_attack.csv") %>% 
+  dplyr::select(SpiderID:Playback, order1:order10) %>% 
+  mutate(frequency1 = ifelse(Playback == 1, 900,
+                     ifelse(Playback == 2, 800,
+                     ifelse(Playback == 3, 200,
+                     ifelse(Playback == 4, 1000,
+                     ifelse(Playback == 5, 700,
+                     ifelse(Playback == 6, 500, 
+                     ifelse(Playback == 7, 100,
+                     ifelse(Playback == 8, 300, 
+                     ifelse(Playback == 9, 600, 
+                     ifelse(Playback == 10, 400, NA))))))))))) %>% 
+  mutate(treatment = ifelse(treatment == "", Experiment, treatment),
+         Site = factor(Site),
+         Year = factor(Year),
+         Location = factor(Location),
+         treatment = factor(treatment),
+         SpiderID = factor(SpiderID),
+         Site = fct_relevel(Site, "Rural", "Urban"))
+```
+
+
+# Playback Conditions During Web Construction
+
+```{r playback}
+datapath = "/Users/bjpessman/Documents/phd_research_code/Vibration_Transmission/playback"
+setwd(datapath)
+txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+txt_files_df <- lapply(txt_files_ls,
+                       function(x){
+                         read.table(file = x, header = TRUE, sep ="\t")
+                         })
+for (i in 1:length(txt_files_df)){
+  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+  }
+playback <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+playback <- playback %>%
+  dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+colnames(playback) <- c("Low_Freq", "Power", "File")
+playback <- playback %>%
+  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+  separate_wider_delim(cols = Name, names = c("Rec", "Treatment"), "_") %>%
+  dplyr::select(Rec, Treatment, Low_Freq, Power)
+
+quiet <- playback %>%
+  filter(Treatment == "ambient" | Treatment == "quiet") %>%
+  pivot_wider(names_from = "Treatment", values_from = "Power") %>%
+  mutate(ambient_u = 10^(ambient/10),
+         quiet_u = 10^(quiet/10),
+         snr_u = (quiet_u - ambient_u)/ambient_u,
+         snr_db = 10 * log10(snr_u),
+         Treatment = "Quiet") %>%
+  dplyr::select(Rec, Low_Freq, Treatment, snr_db)
+
+loud <- playback %>%
+  filter(Treatment == "ambient" | Treatment == "loud") %>%
+  pivot_wider(names_from = "Treatment", values_from = "Power") %>%
+  mutate(ambient_u = 10^(ambient/10),
+         loud_u = 10^(loud/10),
+         snr_u = (loud_u - ambient_u)/ambient_u,
+         snr_db = 10 * log10(snr_u),
+         Treatment = "Loud") %>%
+  dplyr::select(Rec, Low_Freq, Treatment, snr_db)
+
+playback <- rbind(quiet, loud) %>%
+  mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+```
+
+```{r playback removed}
+playback_removed1 <- playback %>%
+  group_by(Rec, Treatment) %>%
+  summarize(sum_na = sum(is.na(snr_db))) # dropped 901 rows from 12 trials (mostly from quiet because the quiet treatment could be louder than ambient at times)
+playback_removed2 <- playback %>%
+  filter(snr_db < 0) %>%
+  drop_na() %>%
+  group_by(Rec, Treatment) %>%
+  count() # dropped 734 rows from 11 trials (mostly from quiet)
+playback_removed <- full_join(playback_removed1, playback_removed2) %>%
+  mutate(sum_zero = n) %>%
+  dplyr::select(-n)
+playback_removed[is.na(playback_removed)] <- 0
+playback_removed <- playback_removed %>%
+  mutate(sum = sum_na + sum_zero)
+
+playback <- playback %>%
+  drop_na() %>%
+  filter(! snr_db < 0) %>%
+  mutate(Treatment = fct_relevel(Treatment, "Quiet", "Loud"))
+```
+
+# Measuring Web Vibration Transmission
+
+## 1. Calculate the signal-to-noise ratio applied by the stimulus at point of contact with the web.
+
+We used the laser vibrometer to record from the surface of the stimulus as it produced vibrations. We subtracted the power recorded during silent conditions to remove background noise.
+
+```{r stimulus}
+stimulus <- read.csv("data/stimulus.csv") %>% 
+  mutate(
+         # convert ambient and test to linear units
+         Power_ambient_u = 10^(Power_ambient/10),
+         Power_test_u = 10^(Power_test/10),
+         # calculate linear snr
+         snr_u_stim = (Power_test_u - Power_ambient_u)/Power_ambient_u,
+         # convert to logarithmic snr
+         snr_db_stim = 10 * log10(snr_u_stim),
+         # rename some columns to clean up later code
+         Power_ambient_stim = Power_ambient,
+         Power_test_stim = Power_test) %>% 
+  dplyr::select(Low_Freq, Power_ambient_stim, Power_test_stim, snr_u_stim, snr_db_stim)
+```
+
+```{r dropped stimulus values}
+stimulus %>% # one dropped Low_Freq = 91.5
+  filter(is.na(snr_db_stim)) 
+stimulus %>% # one dropped Low_Freq = 86.1
+  filter(snr_db_stim < 0)
+
+stimulus <- stimulus %>% 
+  filter(! snr_db_stim < 0) %>% 
+  drop_na()
+```
+
+## 2. Import test and ambient data from the trials.
+
+### Import Test Data 
+
+Test = recording *during* the playback signal.
+
+```{r test data}
+datapath = "/Users/bjpessman/Documents/phd_research_code/Vibration_Transmission/text_files_5_38hz"
+setwd(datapath)
+getwd()
+txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+txt_files_df <- lapply(txt_files_ls,
+                       function(x){
+                         read.table(file = x, header = TRUE, sep ="\t")
+                         })
+for (i in 1:length(txt_files_df)){
+  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+  }
+main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+main <- main %>%
+  dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+colnames(main) <- c("Low_Freq", "Power", "File")
+main <- main %>%
+  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+  separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>%
+  separate(col = Location, into = c("Position", "Trial"), sep = -1) %>%
+  separate(col = Position, into = c("Distance", "Position"), sep = -1) %>%
+  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power)
+
+test_Power <- main %>%
+  drop_na() %>%
+  mutate(Power_test_trial = Power) %>%
+  dplyr::select(-Power)
+```
+
+### Import Ambient Data
+
+Ambient = silence *before* the playback signal. 
+
+```{r ambient data}
+datapath = "/Users/bjpessman/Documents/phd_research_code/Vibration_Transmission/text_files_5_38hz_ambient"
+setwd(datapath)
+txt_files_ls = list.files(path = datapath, pattern = "*.txt")
+txt_files_df <- lapply(txt_files_ls,
+                       function(x){
+                         read.table(file = x, header = TRUE, sep ="\t")
+                         })
+for (i in 1:length(txt_files_df)){
+  txt_files_df[[i]] <- cbind(txt_files_df[[i]],txt_files_ls[i])
+  }
+main <- do.call("rbind", lapply(txt_files_df, as.data.frame))
+main <- main %>%
+  dplyr::select(Low.Freq..Hz., Inband.Power..dB.FS., `txt_files_ls[i]`)
+colnames(main) <- c("Low_Freq", "Power", "File")
+main <- main %>%
+  separate_wider_delim(cols = File, names = c("Name", "Ext"), ".") %>%
+  separate_wider_delim(cols = Name, names = c("SpiderID", "Location"), "_") %>%
+  separate(col = Location, into = c("Position", "Trial"), sep = -1) %>%
+  separate(col = Position, into = c("Distance", "Position"), sep = -1) %>%
+  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power)
+
+ambient_Power <- main %>%
+  drop_na() %>%
+  mutate(Power_ambient_trial = Power) %>%
+  dplyr::select(-Power)
+```
+
+## 3. Calculate the signal-to-noise ratio of the recorded signal at different areas on the web
+
+We used a laser vibrometer to record vibrations from the surface of the web while the stimulus played vibrations on the web.
+
+```{r correct}
+# subtract ambient from test measures
+main <- full_join(test_Power, ambient_Power, by = c("SpiderID", "Distance", "Position", "Trial", "Low_Freq")) %>%
+  mutate(
+         # convert ambient and test to linear units
+         Power_ambient_u = 10^(Power_ambient_trial/10),
+         Power_test_u = 10^(Power_test_trial/10),
+         # calculate linear snr
+         snr_u_trial = (Power_test_u - Power_ambient_u)/Power_ambient_u,
+         # convert to logarithmic snr
+         snr_db_trial = 10 * log10(snr_u_trial)) %>%
+  #filter(! Low_Freq < 20) %>% # drops 4320 rows (4 Low_Freq x 60 Spiders * 18 trials)
+  dplyr::select(SpiderID, Distance, Position, Trial, Low_Freq, Power_ambient_trial, Power_test_trial, snr_u_trial, snr_db_trial) 
+```
+
+```{r removed}
+main_removed1 <- main %>%
+  group_by(SpiderID, Distance, Position, Trial) %>%
+  summarize(sum_na = sum(is.na(snr_db_trial))) 
+sum(main_removed1$sum_na)
+mean(main_removed1$sum_na) # 19231 dropped across 1080 trials (avg 17.8 per trial); these are instances where the background noise was greater than the recording (log10 of <= 0)
+main_removed2 <- main %>%
+  drop_na() %>%
+  filter(snr_db_trial < 0) %>%
+  group_by(SpiderID, Distance, Position, Trial) %>%
+  count()
+sum(main_removed2$n)
+mean(main_removed2$n)# 33560 dropped across 1065 trials (avg 31.5 per trial); these are instances where the background noise nearly equalled the recording (log10 of 0.001-0.999)
+main_removed <- full_join(main_removed1, main_removed2) %>%
+  mutate(sum_zero = n) %>%
+  dplyr::select(-n)
+main_removed[is.na(main_removed)] <- 0
+main_removed <- main_removed %>%
+  mutate(sum = sum_na + sum_zero)
+
+main <- main %>%
+  drop_na() %>%
+  filter(! snr_db_trial < 0)
+
+example <- main %>% 
+  filter(SpiderID == "ap109", 
+         Distance == "close",
+         Position == "a",
+         Trial == "1")
+```
+
+## 4. Add information about the silk
+
+```{r silk}
+spiders <- read.csv("/Users/bjpessman/Documents/phd_research_code/Vibration_Transmission/data/treatments_assigned_20230905.csv", header = TRUE) %>% 
+  filter(!Site == "Isolated")
+
+# calculate condition
+rownames(spiders) <- c(spiders$SpiderID)
+cond <- data.frame(cbind(condition = residuals(lm(log(mass_mg) ~ log(ceph_width_mm), data = spiders)),
+                         SpiderID = names(residuals(lm(log(mass_mg) ~ log(ceph_width_mm), data = spiders)))))
+# add condition to the dataset
+spiders <- full_join(spiders, cond, by = "SpiderID") %>% 
+  mutate(condition = as.numeric(condition)) %>% 
+  unite("Site_Treatment", c(Site, treatment), sep = "_", remove = FALSE)
+
+main <- left_join(main, spiders, by = "SpiderID")
+
+main <- unite(data = main, col = "unique", SpiderID:Trial, remove = FALSE)
+```
+
+## 5. Combine stimulus and trial datasets
+
+```{r combine}
+main <- left_join(main, stimulus, by = "Low_Freq") %>% 
+  mutate(Site = factor(Site),
+         treatment = factor(treatment)) %>% 
+  unite("Dist_Pos", Distance:Position, sep = "_", remove = FALSE)
+```
+
+## 6 (Method 1) Calculate the energy loss and  average across spiders using logarithmic units
+
+```{r energy loss 1}
+vibration_transmission <- main %>% 
+  mutate(snr_db = 10 * log10(snr_u_trial/snr_u_stim))
+```
+
+```{r removed 1}
+vibration_transmission_removed <- vibration_transmission %>%
+  group_by(SpiderID, Distance, Position, Trial) %>%
+  summarize(sum_na = sum(is.na(snr_db)))
+sum(vibration_transmission_removed$sum_na)
+ # dropped 1817 because stimulus had been dropped at that Low_Freq (86.1 or 91.5)
+
+vibration_transmission <- vibration_transmission %>% 
+  drop_na(snr_db)
+```
+
+```{r check position 1}
+#positions - overall
+distances <- vibration_transmission %>% 
+  group_by(Low_Freq, Site, treatment, Dist_Pos) %>% 
+  summarize(mean_snr = mean(snr_db),
+            se_snr = plotrix::std.error(snr_db)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment= fct_relevel(treatment, "Quiet", "Loud"),
+         Dist_Pos = fct_recode(Dist_Pos, "Short A" = "close_a", "Short B" = "close_b", "Short C" = "close_c", "Longer A" = "far_a", "Longer B" = "far_b", "Longer C" = "far_c"),
+         Dist_Pos = fct_relevel(Dist_Pos, "Short A", "Longer A", "Short B", "Longer B", "Short C", "Longer C")) 
+
+size = 16
+treatment.labs <- c("Quiet (4 Days)", "Loud (4 Days)")
+names(treatment.labs) <- c("Quiet", "Loud")
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos), alpha = 0.2, data = distances, linewidth = 0.25) +
+  geom_smooth(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos, fill = Dist_Pos), data = distances, method = "loess", linewidth = 0.5) +
+  xlab("Frequency (Hz)") +
+  ylab("Energy Loss through Web Transmission (∆ dB)") +
+  labs(fill = "", color = "") +
+  scale_color_manual("", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_fill_manual("", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_x_continuous(limits = c(20, 2250), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-75, 20), breaks = c(seq(-60, 20, 20)), expand = c(0,0)) +
+  #scale_x_continuous(limits = c(20, 1000), breaks = c(20, 250, 500, 750, 1000), expand = c(0,0)) +
+  #scale_y_continuous(limits = c(-60, 20), breaks = c(seq(-50, 20, 10)), expand = c(0,0)) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top") +
+  facet_grid(Site ~ treatment, labeller = labeller(treatment = treatment.labs))
+
+```
+
+```{r average 1}
+vibration_transmission <- vibration_transmission %>% 
+  group_by(SpiderID, Low_Freq, Distance, Site, treatment, Site_Treatment, trial_age, mass_mg, condition, wet_mg, dry_mg, moisture_per) %>% 
+  # average across spider using linear units since positions did not differ (step 6, method 2)
+  summarise(spider_snr_db = mean(snr_db)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site), 
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         SpiderID = factor(SpiderID),
+         Low_Freq = as.numeric(Low_Freq),
+         Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud")) %>% 
+  ungroup()
+```
+
+## 6 (Method 2) Average across positions and spiders using linear units and calculate energy loss 
+
+```{r average and energy loss 2}
+vibration_transmission_position2 <- main %>% 
+  group_by(SpiderID, Low_Freq, Distance, Position, Dist_Pos, Site, treatment, Site_Treatment, trial_age, mass_mg, condition, wet_mg, dry_mg, moisture_per, snr_u_stim) %>% 
+  # average across spider and position using linear units
+  summarise(position_snr_u = mean(snr_u_trial)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site), 
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         SpiderID = factor(SpiderID),
+         Low_Freq = as.numeric(Low_Freq),
+         Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud")) %>% 
+  ungroup() %>% 
+  # convert to logarithmic snr
+  mutate(position_snr_db = 10 * log10(position_snr_u/snr_u_stim))
+```
+
+```{r check position 2}
+#positions - overall
+distances2 <- vibration_transmission_position2 %>% 
+  group_by(Low_Freq, Site, treatment, Dist_Pos) %>% 
+  summarize(mean_snr = mean(position_snr_db),
+            se_snr = plotrix::std.error(position_snr_db)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment= fct_relevel(treatment, "Quiet", "Loud"),
+         Dist_Pos = fct_recode(Dist_Pos, "Short A" = "close_a", "Short B" = "close_b", "Short C" = "close_c", "Longer A" = "far_a", "Longer B" = "far_b", "Longer C" = "far_c"),
+         Dist_Pos = fct_relevel(Dist_Pos, "Short A", "Longer A", "Short B", "Longer B", "Short C", "Longer C")) 
+
+size = 16
+treatment.labs <- c("Quiet (4 Days)", "Loud (4 Days)")
+names(treatment.labs) <- c("Quiet", "Loud")
+ggplot() +
+  geom_line(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos), alpha = 0.2, data = distances2, linewidth = 0.25) +
+  geom_smooth(aes(x = Low_Freq, y = mean_snr, group = Dist_Pos, color = Dist_Pos, fill = Dist_Pos), data = distances2, method = "loess", linewidth = 0.5) +
+  xlab("Frequency (Hz)") +
+  ylab("Energy Loss through Web Transmission (∆ dB)") +
+  labs(fill = "", color = "") +
+  scale_color_manual("", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_fill_manual("", values = c("darkred", "blue", "darkorange", "darkgreen", "gold3", "purple")) +
+  scale_x_continuous(limits = c(20, 2250), breaks = c(20, 500, 1000, 1500, 2000), expand = c(0,0)) +
+  scale_y_continuous(limits = c(-75, 20), breaks = c(seq(-60, 20, 20)), expand = c(0,0)) +
+  #scale_x_continuous(limits = c(20, 1000), breaks = c(20, 250, 500, 750, 1000), expand = c(0,0)) +
+  #scale_y_continuous(limits = c(-60, 20), breaks = c(seq(-50, 20, 10)), expand = c(0,0)) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top") +
+  facet_grid(Site ~ treatment, labeller = labeller(treatment = treatment.labs))
+#700 x 600
+```
+
+```{r average 2}
+vibration_transmission2 <- main %>% 
+  group_by(SpiderID, Low_Freq, Distance, Site, treatment, Site_Treatment, trial_age, mass_mg, condition, wet_mg, dry_mg, moisture_per, snr_u_stim) %>% 
+  # average across spider using linear units since positions did not differ (step 6, method 2)
+  summarise(spider_snr_u = mean(snr_u_trial)) %>% 
+  mutate(treatment = factor(treatment),
+         treatment = fct_relevel(treatment, "Quiet", "Loud"),
+         Site = factor(Site), 
+         Site = fct_relevel(Site, "Rural", "Urban"),
+         SpiderID = factor(SpiderID),
+         Low_Freq = as.numeric(Low_Freq),
+         Site_Treatment = factor(Site_Treatment),
+         Site_Treatment = fct_relevel(Site_Treatment, "Rural_Quiet", "Rural_Loud", "Urban_Quiet", "Urban_Loud")) %>% 
+  ungroup() %>% 
+  # convert to logarithmic snr
+  mutate(spider_snr_db = 10 * log10(spider_snr_u/snr_u_stim))
+```
+
+```{r removed 2}
+vibration_transmission2_removed <- vibration_transmission2 %>%
+  group_by(SpiderID, Distance) %>%
+  summarize(sum_na = sum(is.na(spider_snr_db)))
+sum(vibration_transmission2_removed$sum_na)
+ # dropped 239 because stimulus had been dropped at that Low_Freq (86.1 or 91.5)
+
+vibration_transmission2 <- vibration_transmission2 %>% 
+  drop_na(spider_snr_db)
+```
+
+# Save
+
+```{r save}
+saveRDS(freq_response_attack, file = "wrangled_data/freq_response_attack.rds")
+saveRDS(freq_response_order, file = "wrangled_data/freq_response_order.rds")
+saveRDS(playback, file = "wrangled_data/playback.rds")
+saveRDS(example, file = "wrangled_data/example.rds")
+saveRDS(stimulus, file = "wrangled_data/stimulus.rds")
+saveRDS(vibration_transmission, file = "wrangled_data/vibration_transmission.rds")
+saveRDS(vibration_transmission2, file = "wrangled_data/vibration_transmission2.rds")
+```

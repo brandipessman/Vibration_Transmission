@@ -1,0 +1,260 @@
+---
+title: "Analysis of Frequency Response"
+author: "Brandi Pessman"
+date: "2024-11-21"
+output: html_document
+---
+
+# Load Libraries
+
+```{r libraries}
+library(tidyverse) # graphs and wrangling
+library(mgcv) # gam
+library(emmeans) # emmeans
+```
+
+# Load Data
+
+```{r import}
+freq_response_attack <-readRDS("wrangled_data/freq_response_attack.rds")
+freq_response_order <-readRDS("wrangled_data/freq_response_order.rds")
+```
+
+# Attack Response across Relevant Pure Tone Frequencies
+
+```{r descriptives}
+# min max and mean of days between experiments by experiment
+freq_response_attack %>% 
+  filter(frequency == 100) %>% 
+  group_by(Year, Experiment) %>% 
+  summarize(min = min(Rest_Days), 
+            max = max(Rest_Days), 
+            mean = mean(Rest_Days), 
+            se = plotrix::std.error(Rest_Days))
+
+# sample sizes for each experiment, year. site, and treatment
+freq_response_attack %>% 
+  filter(frequency == 100) %>% 
+  group_by(Year, Experiment, Site, treatment) %>% 
+  count()
+```
+
+```{r gam}
+# global gam model
+gam_attack <- gam(react ~  s(frequency, by = Site, bs = "sz") + s(Location, bs = "re") + s(Year, bs = "re") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = freq_response_attack)
+summary(gam_attack) # remove Year
+
+# model with year removed
+gam_attack1 <- gam(react ~  s(frequency, by = Site, bs = "sz") + s(Location, bs = "re") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = freq_response_attack)
+summary(gam_attack1) # remove Location
+
+# model with year and location removed
+gam_attack2 <- gam(react ~ s(frequency, by = Site, bs = "sz") + s(Freq_Age, bs = "re") + s(treatment, bs = "re"), family = "binomial", data = freq_response_attack)
+summary(gam_attack2) # remove treatment
+
+# model with year, location, and treatment removed
+gam_attack3 <- gam(react ~  Site + s(frequency, by = Site, bs = "sz") + s(Freq_Age, bs = "re"), family = "binomial", data = freq_response_attack)
+summary(gam_attack3) # remove Freq_Age
+
+# model with year, location, treatment, and Freq_Age removed
+gam_attack4 <- gam(react ~ s(frequency, by = Site, bs = "sz"), family = "binomial", data = freq_response_attack)
+sum <- summary(gam_attack4)  
+sum
+
+# compare to the null model
+gam_attack_null <- gam(react ~ 1, family = "binomial", data = freq_response_attack)
+summary(gam_attack_null)
+anova(gam_attack_null, gam_attack4, test = "F") # model with frequency by site is better than the null model
+c(AIC(gam_attack), AIC(gam_attack1), AIC(gam_attack2), AIC(gam_attack3), AIC(gam_attack4), AIC(gam_attack_null))
+
+gam.check(gam_attack4)
+emm <- emmeans(gam_attack4, pairwise~frequency|Site, at = list(frequency = seq(100,1000, 100)), adjust = "none")
+pairs(emm)
+pwpm(emm, means = FALSE, flip = TRUE, adjust = "none") 
+```
+
+```{r graph}
+nd <- expand.grid(frequency = seq(100,1000,100), 
+                  Site = levels(freq_response_attack$Site))
+predictions <- data.frame(predict(gam_attack4, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site = fct_relevel(Site, "Rural", "Urban"))
+
+# sample size
+freq_response_attack %>%
+  filter(frequency == 100) %>% 
+  group_by(Site) %>%
+  count() 
+  
+fr_attack_sum <- freq_response_attack %>%
+  group_by(Site, frequency) %>%
+  summarize(sum = sum(react),
+            prop = ifelse(Site == "Rural", sum/58, sum/63)) %>%
+  unique()
+
+two_colors = c("#1b9e77", "#d95f02")
+size=16
+ggplot() +
+  #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
+ # geom_line(aes(x = frequency, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
+  #geom_line(aes(x = frequency, y = fit, color = Site), data = predictions) +
+  geom_ribbon(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site), alpha = 0.5, data = predictions) +
+  geom_point(aes(x = frequency, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
+  geom_line(aes(x = frequency, y = fit, color = Site), linewidth = 0.75, data = predictions) +
+  #geom_errorbar(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
+  scale_x_continuous(limits = c(0, 1100), breaks = c(seq(0,1000,200)), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 0.5), breaks = c(seq(0,0.5,0.1)), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Proportion of spiders that attacked") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top")
+```
+
+# Checking if spiders are more likely to attack earlier frequencies in the progression
+
+```{r order descriptives}
+freq_response_order_longer <- freq_response_order %>% 
+  pivot_longer(cols = c(order1:order10), values_to = "react", names_to = "order") %>% 
+  mutate(order = fct_recode(order, "1" = "order1",
+                                "2" = "order2",
+                                "3" = "order3",
+                                "4" = "order4",
+                                "5" = "order5",
+                                "6" = "order6",
+                                "7" = "order7",
+                                "8" = "order8",
+                                "9" = "order9",
+                                "10" = "order10"),
+         order = as.character(order),
+         order = as.numeric(order)) 
+
+# sample sizes for each experiment, year. site, and treatment
+freq_response_order_longer %>% 
+  filter(order == 1) %>% 
+  group_by(Year, Experiment, Site, treatment) %>% 
+  count()
+```
+
+```{r gam order}
+# model with year, location, treatment, and Freq_Age removed
+gam_order<- gam(react ~ s(order, by = Site, bs = "sz"), family = "binomial", data = freq_response_order_longer)
+sum <- summary(gam_order)  
+sum
+
+# compare to the null model
+gam_order_null <- gam(react ~ 1, family = "binomial", data = freq_response_order_longer)
+anova(gam_order_null, gam_order, test = "F") # model with frequency by site is better than the null model
+c(AIC(gam_order), AIC(gam_order_null))
+```
+
+```{r graph order}
+nd <- expand.grid(order = seq(1,10,1), 
+                  Site = levels(freq_response_order_longer$Site))
+predictions <- data.frame(predict(gam_order, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site = fct_relevel(Site, "Rural", "Urban"))
+
+fr_attack_sum <- freq_response_order_longer %>%
+  group_by(Site, order) %>%
+  summarize(sum = sum(react),
+            prop = ifelse(Site == "Rural", sum/58, sum/63)) %>%
+  unique()
+
+two_colors = c("#1b9e77", "#d95f02")
+size = 16
+ggplot() +
+  #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
+ # geom_line(aes(x = order, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
+  #geom_line(aes(x = order, y = fit, color = Site), data = predictions) +
+  geom_ribbon(aes(x = order, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site), alpha = 0.5, data = predictions) +
+  geom_point(aes(x = order, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
+  geom_line(aes(x = order, y = fit, color = Site), linewidth = 0.75, data = predictions) +
+  #geom_errorbar(aes(x = order, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
+  scale_x_continuous(limits = c(0, 10), breaks = c(seq(0,10,1)), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 1), breaks = c(seq(0,1,0.2)), expand = c(0,0)) +
+  xlab("Order of Frequencies Tested") +
+  ylab("Proportion of spiders that attacked") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top")
+```
+
+# Checking just the first frequency given
+
+```{r order1 descriptives}
+freq_response_order1 <- freq_response_order %>% 
+  dplyr::select(SpiderID:frequency1, order1)
+# sample sizes by site and frequency
+sample_size <- freq_response_order1 %>% 
+  group_by(Site, frequency1) %>% 
+  count()
+```
+
+```{r gam order1}
+# model with year, location, treatment, and Freq_Age removed
+gam_order<- gam(order1 ~ s(frequency1, by = Site, bs = "sz"), family = "binomial", data = freq_response_order1)
+sum <- summary(gam_order)  
+sum
+
+# compare to the null model
+gam_order_null <- gam(order1 ~ 1, family = "binomial", data = freq_response_order1)
+anova(gam_order_null, gam_order, test = "F") # model with frequency by site is better than the null model
+c(AIC(gam_order), AIC(gam_order_null))
+```
+
+```{r graph order1}
+nd <- expand.grid(frequency1 = seq(100,1000,100), 
+                  Site = levels(freq_response_order1$Site))
+predictions <- data.frame(predict(gam_order, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site = fct_relevel(Site, "Rural", "Urban"))
+
+fr_order_sum <- freq_response_order1 %>%
+  group_by(Site, frequency1) %>%
+  summarize(sum = sum(order1)) %>%
+  unique()
+
+fr_order_sum <- full_join(fr_order_sum, sample_size, by = c("Site", "frequency1")) %>% 
+  mutate(prop = sum/n)
+
+two_colors = c("#1b9e77", "#d95f02")
+size = 16
+ggplot() +
+  #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
+ # geom_line(aes(x = frequency, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
+  #geom_line(aes(x = frequency, y = fit, color = Site), data = predictions) +
+  geom_ribbon(aes(x = frequency1, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site), alpha = 0.5, data = predictions) +
+  geom_point(aes(x = frequency1, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
+  geom_line(aes(x = frequency1, y = fit, color = Site), linewidth = 0.75, data = predictions) +
+  #geom_errorbar(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
+  scale_x_continuous(limits = c(0, 1100), breaks = c(seq(0,1000,200)), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 1), breaks = c(seq(0,1,0.2)), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Proportion of spiders that attacked") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top")
+```
+

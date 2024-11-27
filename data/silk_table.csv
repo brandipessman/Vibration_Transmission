@@ -1,0 +1,7 @@
+dependent,df,independent,test_statistic,p_value
+silk_mass,56,Site,2.534,0.117
+silk_mass,56,Treatment,0.081,0.777
+silk_mass,56,Site_Treatment,2.436,0.124
+silk_moist,_56,Site,0.545,0.463
+silk_moist,_56,Treatment,2.988,0.089
+silk_moist,_56,Site_Treatment,2.057,0.157
