@@ -37,6 +37,11 @@ freq_response_attack %>%
   filter(frequency == 100) %>% 
   group_by(Year, Experiment, Site, treatment) %>% 
   count()
+
+freq_response_attack %>% 
+  filter(frequency == 100) %>% 
+  group_by(Site) %>% 
+  count()
 ```
 
 ```{r gam}
@@ -61,13 +66,17 @@ gam_attack4 <- gam(react ~ s(frequency, by = Site, bs = "sz"), family = "binomia
 sum <- summary(gam_attack4)  
 sum
 
+gam_attack5 <- gam(react ~ s(frequency, by = Site, bs = "sz") +  s(treatment, bs = "re"), family = "binomial", data = freq_response_attack)
+summary(gam_attack5)  
+
 # compare to the null model
 gam_attack_null <- gam(react ~ 1, family = "binomial", data = freq_response_attack)
 summary(gam_attack_null)
-anova(gam_attack_null, gam_attack4, test = "F") # model with frequency by site is better than the null model
+anova(gam_attack_null, gam_attack4, test = "LRT") # model with frequency by site is better than the null model
 c(AIC(gam_attack), AIC(gam_attack1), AIC(gam_attack2), AIC(gam_attack3), AIC(gam_attack4), AIC(gam_attack_null))
 
 gam.check(gam_attack4)
+pairs(emmeans(gam_attack4, ~Site))
 emm <- emmeans(gam_attack4, pairwise~frequency|Site, at = list(frequency = seq(100,1000, 100)), adjust = "none")
 pairs(emm)
 pwpm(emm, means = FALSE, flip = TRUE, adjust = "none") 
@@ -151,7 +160,7 @@ sum
 
 # compare to the null model
 gam_order_null <- gam(react ~ 1, family = "binomial", data = freq_response_order_longer)
-anova(gam_order_null, gam_order, test = "F") # model with frequency by site is better than the null model
+anova(gam_order_null, gam_order, test = "LRT") # model with frequency by site is better than the null model
 c(AIC(gam_order), AIC(gam_order_null))
 ```
 
@@ -170,7 +179,7 @@ fr_attack_sum <- freq_response_order_longer %>%
   unique()
 
 two_colors = c("#1b9e77", "#d95f02")
-size = 16
+size = 24
 ggplot() +
   #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
  # geom_line(aes(x = order, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
@@ -179,7 +188,7 @@ ggplot() +
   geom_point(aes(x = order, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
   geom_line(aes(x = order, y = fit, color = Site), linewidth = 0.75, data = predictions) +
   #geom_errorbar(aes(x = order, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
-  scale_x_continuous(limits = c(0, 10), breaks = c(seq(0,10,1)), expand = c(0,0)) +
+  scale_x_continuous(limits = c(0, 10.5), breaks = c(seq(0,10,1)), expand = c(0,0)) +
   scale_y_continuous(limits = c(0, 1), breaks = c(seq(0,1,0.2)), expand = c(0,0)) +
   xlab("Order of Frequencies Tested") +
   ylab("Proportion of spiders that attacked") +
@@ -192,6 +201,7 @@ ggplot() +
         legend.title = element_text(size = size, color = "black", family = "sans"),
         strip.text = element_text(size = size, color = "black", family="sans"),
         legend.position = "top")
+#800 x 600
 ```
 
 # Checking just the first frequency given
@@ -234,7 +244,7 @@ fr_order_sum <- full_join(fr_order_sum, sample_size, by = c("Site", "frequency1"
   mutate(prop = sum/n)
 
 two_colors = c("#1b9e77", "#d95f02")
-size = 16
+size = 24
 ggplot() +
   #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
  # geom_line(aes(x = frequency, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
@@ -257,4 +267,107 @@ ggplot() +
         strip.text = element_text(size = size, color = "black", family="sans"),
         legend.position = "top")
 ```
+
+# Checking first five frequencies given
+
+```{r wrangling}
+first_five <- freq_response_attack %>% 
+  mutate(order = ifelse(Playback == 1 & frequency == 900 |
+                        Playback == 2 & frequency == 800 |
+                        Playback == 3 & frequency == 200 |
+                        Playback == 4 & frequency == 1000 |
+                        Playback == 5 & frequency == 700 |
+                        Playback == 6 & frequency == 500 |
+                        Playback == 7 & frequency == 100 |
+                        Playback == 8 & frequency == 300 |
+                        Playback == 9 & frequency == 600 |
+                        Playback == 10 & frequency == 400, 1,
+                  ifelse(Playback == 1 & frequency == 700 |
+                         Playback == 2 & frequency == 200 |
+                         Playback == 3 & frequency == 500 |
+                         Playback == 4 & frequency == 100 |
+                         Playback == 5 & frequency == 500 |
+                         Playback == 6 & frequency == 200 |
+                         Playback == 7 & frequency == 400 |
+                         Playback == 8 & frequency == 1000 |
+                         Playback == 9 & frequency == 500 |
+                         Playback == 10 & frequency == 700, 2,
+                  ifelse(Playback == 1 & frequency == 800 |
+                         Playback == 2 & frequency == 500 |
+                         Playback == 3 & frequency == 1000 |
+                         Playback == 4 & frequency == 900 |
+                         Playback == 5 & frequency == 300 |
+                         Playback == 6 & frequency == 100 |
+                         Playback == 7 & frequency == 600 |
+                         Playback == 8 & frequency == 400 |
+                         Playback == 9 & frequency == 800 |
+                         Playback == 10 & frequency == 600, 3, 
+                  ifelse(Playback == 1 & frequency == 600 |
+                         Playback == 2 & frequency == 400 |
+                         Playback == 3 & frequency == 100 |
+                         Playback == 4 & frequency == 800 |
+                         Playback == 5 & frequency == 900 |
+                         Playback == 6 & frequency == 300 |
+                         Playback == 7 & frequency == 1000 |
+                         Playback == 8 & frequency == 600 |
+                         Playback == 9 & frequency == 700 |
+                         Playback == 10 & frequency == 200, 4, 
+                  ifelse(Playback == 1 & frequency == 300 |
+                         Playback == 2 & frequency == 300 |
+                         Playback == 3 & frequency == 800 |
+                         Playback == 4 & frequency == 500 |
+                         Playback == 5 & frequency == 1000 |
+                         Playback == 6 & frequency == 400 |
+                         Playback == 7 & frequency == 300 |
+                         Playback == 8 & frequency == 200 |
+                         Playback == 9 & frequency == 400 |
+                         Playback == 10 & frequency == 500, 5, 0)))))) %>% 
+  filter(order != 0)
+
+sample_size <- first_five %>% 
+  group_by(Site, frequency) %>% 
+  count()
+min(sample_size$n)
+max(sample_size$n)
+```
+
+```{r first five gam}
+gam_first_five <- gam(react ~ s(frequency, by = Site, bs = "sz"), family = "binomial", data = first_five)
+summary(gam_first_five)  
+```
+
+```{r first five graph}
+nd <- expand.grid(frequency = seq(100,1000,100), 
+                  Site = levels(first_five$Site))
+predictions <- data.frame(predict(gam_first_five, newdata = nd, type = "response", 
+                       se.fit = TRUE))
+predictions <- cbind(nd, predictions) %>% 
+  mutate(Site = fct_relevel(Site, "Rural", "Urban"))
+
+two_colors = c("#1b9e77", "#d95f02")
+size=18
+ggplot() +
+  #geom_point(aes(x = frequency, y = prop, color = Site), alpha = 0.5, size = 2, data = fr_attack_sum) +
+ # geom_line(aes(x = frequency, y = prop, color = Site), alpha = 0.5, data = fr_attack_sum) +
+  #geom_line(aes(x = frequency, y = fit, color = Site), data = predictions) +
+  geom_ribbon(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, fill = Site), alpha = 0.5, data = predictions) +
+  geom_point(aes(x = frequency, y = fit, color = Site), shape = 15, size = 4, data = predictions) +
+  geom_line(aes(x = frequency, y = fit, color = Site), linewidth = 0.75, data = predictions) +
+  #geom_errorbar(aes(x = frequency, ymin = fit - 1.96 * se.fit, ymax = fit + 1.96 * se.fit, color = Site), linewidth = 0.75, position = position_dodge(width = 50), width = 0, data = predictions) +
+  scale_x_continuous(limits = c(0, 1100), breaks = c(seq(0,1000,200)), expand = c(0,0)) +
+  scale_y_continuous(limits = c(0, 1.0), breaks = c(seq(0,1,0.2)), expand = c(0,0)) +
+  xlab("Frequency (Hz)") +
+  ylab("Proportion of spiders that attacked") +
+  scale_fill_manual("", values = two_colors) +
+  scale_color_manual("", values = two_colors) +
+  theme_classic() +
+  theme(axis.text = element_text(size = size, color = "black", family = "sans"),
+        axis.title = element_text(size = size, color = "black", family = "sans"),
+        legend.text = element_text(size = size, color = "black", family = "sans"),
+        legend.title = element_text(size = size, color = "black", family = "sans"),
+        strip.text = element_text(size = size, color = "black", family="sans"),
+        legend.position = "top")
+#600x450
+```
+
 
