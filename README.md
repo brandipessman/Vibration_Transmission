@@ -1,6 +1,10 @@
-# Spiders modulate web vibration transmission in the presence of environmental noise
+# Web transmission properties vary with a spider’s past and current noise exposure
 
-The following data and code are provided as a reference for future publication. This publication was written in association with my Ph.D. dissertation.
+The following data and code are provided as a reference for the associated publication in association in [Current Biology](https://doi.org/10.1111/eea.13487). This publication was written in association with my Ph.D. dissertation.
+
+Access PDF: [View PDF](./Pessman_Hebets_2025.pdf)
+
+![Alt text](./graph_abs.png)
 
 ## Who:
 
@@ -30,11 +34,15 @@ The code presented in this repository walks through the analysis of this data, i
 
 > > 📖 Date Submitted: December 6, 2024
 
+> > 📖 Date Accepted: February 18, 2025
+
+> > 📖 Date Published: March 14, 2025
+
 ## Where:
 
 > > 📓 Data collected in: Lincoln, Nebraska
 
-> > 📖 Data submitted to: *Current Biology*
+> > 📖 Data published in: *Current Biology*
 
 ## Why:
 
