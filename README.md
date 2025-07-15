@@ -4,7 +4,7 @@ The following data and code are provided as a reference for the associated publi
 
 Access PDF: [View PDF](./Pessman_Hebets_2025.pdf)
 
-![Alt text](./graph_abs.png)
+![Alt text](./graph_abs.jpg)
 
 ## Who:
 
